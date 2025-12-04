@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Adembc/lazyssh/internal/core/domain"
 	"github.com/kevinburke/ssh_config"
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
 
 const (

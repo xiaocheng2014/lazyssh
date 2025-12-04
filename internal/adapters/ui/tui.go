@@ -18,8 +18,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"go.uber.org/zap"
 
-	"github.com/Adembc/lazyssh/internal/core/ports"
 	"github.com/rivo/tview"
+	"github.com/xiaocheng2014/lazyssh/internal/core/ports"
 )
 
 type App interface {

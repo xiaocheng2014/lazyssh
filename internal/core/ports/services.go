@@ -17,7 +17,7 @@ package ports
 import (
 	"time"
 
-	"github.com/Adembc/lazyssh/internal/core/domain"
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
 
 type ServerService interface {

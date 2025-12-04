@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Adembc/lazyssh/internal/core/domain"
 	"github.com/mattn/go-runewidth"
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
 
 // IsForwarding is an optional hook supplied by TUI to indicate active forwarding per alias.

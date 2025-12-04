@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Adembc/lazyssh/internal/core/domain"
 	"github.com/atotto/clipboard"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
 
 // =============================================================================

@@ -19,12 +19,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Adembc/lazyssh/internal/adapters/data/ssh_config_file"
-	"github.com/Adembc/lazyssh/internal/logger"
+	"github.com/xiaocheng2014/lazyssh/internal/adapters/data/ssh_config_file"
+	"github.com/xiaocheng2014/lazyssh/internal/logger"
 
-	"github.com/Adembc/lazyssh/internal/adapters/ui"
-	"github.com/Adembc/lazyssh/internal/core/services"
 	"github.com/spf13/cobra"
+	"github.com/xiaocheng2014/lazyssh/internal/adapters/ui"
+	"github.com/xiaocheng2014/lazyssh/internal/core/services"
 )
 
 var (

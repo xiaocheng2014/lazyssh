@@ -50,9 +50,9 @@ changelog:
       - "^test:"
 #brews:
 #  - repository:
-#      owner: adembc
+#      owner: xiaocheng2014
 #      name: homebrew-tap
-#    homepage: "https://github.com/adembc/lazyssh"
+#    homepage: "https://github.com/xiaocheng2014/lazyssh"
 #    description: "A simple terminal UI for managing SSH connections.  "
 
 release:

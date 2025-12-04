@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Adembc/lazyssh/internal/core/domain"
 	"github.com/kevinburke/ssh_config"
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
 
 // toDomainServer converts ssh_config.Config to a slice of domain.Server.

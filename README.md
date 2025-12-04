@@ -120,21 +120,15 @@ SSH into the selected server
 
 ## 📦 Installation
 
-### Option 1: Homebrew (macOS)
+### Option 1: Download Binary from Releases
 
-```bash
-brew install Adembc/homebrew-tap/lazyssh
-```
-
-### Option 2: Download Binary from Releases
-
-Download from [GitHub Releases](https://github.com/Adembc/lazyssh/releases). You can use the snippet below to automatically fetch the latest version for your OS/ARCH (Darwin/Linux and amd64/arm64 supported):
+Download from [GitHub Releases](https://github.com/xiaocheng2014/lazyssh/releases). You can use the snippet below to automatically fetch the latest version for your OS/ARCH (Darwin/Linux and amd64/arm64 supported):
 
 ```bash
 # Detect latest version
-LATEST_TAG=$(curl -fsSL https://api.github.com/repos/Adembc/lazyssh/releases/latest | jq -r .tag_name)
+LATEST_TAG=$(curl -fsSL https://api.github.com/repos/xiaocheng2014/lazyssh/releases/latest | jq -r .tag_name)
 # Download the correct binary for your system
-curl -LJO "https://github.com/Adembc/lazyssh/releases/download/${LATEST_TAG}/lazyssh_$(uname)_$(uname -m).tar.gz"
+curl -LJO "https://github.com/xiaocheng2014/lazyssh/releases/download/${LATEST_TAG}/lazyssh_$(uname)_$(uname -m).tar.gz"
 # Extract the binary
 tar -xzf lazyssh_$(uname)_$(uname -m).tar.gz
 # Move to /usr/local/bin or another directory in your PATH
@@ -143,11 +137,11 @@ sudo mv lazyssh /usr/local/bin/
 lazyssh
 ```
 
-### Option 3: Build from Source
+### Option 2: Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/Adembc/lazyssh.git
+git clone https://github.com/xiaocheng2014/lazyssh.git
 cd lazyssh
 
 # Build for macOS
@@ -195,7 +189,7 @@ Tip: The hint bar at the top of the list shows the most useful shortcuts.
 
 Contributions are welcome!
 
-- If you spot a bug or have a feature request, please [open an issue](https://github.com/adembc/lazyssh/issues).
+- If you spot a bug or have a feature request, please [open an issue](https://github.com/xiaocheng2014/lazyssh/issues).
 - If you'd like to contribute, fork the repo and submit a pull request ❤️.
 
 We love seeing the community make Lazyssh better 🚀
@@ -224,7 +218,6 @@ Examples:
 - fix(parser): handle comments at end of Host blocks
 - improve(cli): show friendly error when ssh binary missing
 - refactor(config): simplify backup rotation logic
-- docs: add installation instructions for Homebrew
 - ci: cache Go toolchain and dependencies
 
 Tip: If your PR touches multiple areas, pick the most relevant scope or omit the scope.
@@ -233,11 +226,11 @@ Tip: If your PR touches multiple areas, pick the most relevant scope or omit the
 
 ## ⭐ Support
 
-If you find Lazyssh useful, please consider giving the repo a **star** ⭐️ and join [stargazers](https://github.com/adembc/lazyssh/stargazers).
+If you find Lazyssh useful, please consider giving the repo a **star** ⭐️ and join [stargazers](https://github.com/xiaocheng2014/lazyssh/stargazers).
 
-☕ You can also support me by [buying me a coffee](https://www.buymeacoffee.com/adembc) ❤️
+☕ You can also support me by [buying me a coffee](https://www.buymeacoffee.com/xiaocheng2014) ❤️
 <br/>
-<a href="https://buymeacoffee.com/adembc" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="200"></a>
+<a href="https://buymeacoffee.com/xiaocheng2014" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="200"></a>
 
 
 ---
