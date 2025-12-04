@@ -173,6 +173,42 @@ func (s *serverService) SSH(alias string) error {
 	return nil
 }
 
+// TCPDUMP use wireshark
+func (s *serverService) MACOSTcpDump(alias string) error {
+	s.logger.Infow("tcpdump with ssh start", "alias", alias)
+	wiresharkPath := os.Getenv("WIRESHARK_PATH")
+	if wiresharkPath == "" {
+		var err error
+		wiresharkPath, err = exec.LookPath("wireshark")
+		if err != nil {
+			// fallback to default macOS path
+			wiresharkPath = "/Applications/Wireshark.app/Contents/MacOS/Wireshark"
+			if _, statErr := os.Stat(wiresharkPath); statErr != nil {
+				s.logger.Errorw("Wireshark not found in PATH or default location", "error", err)
+				return fmt.Errorf("wireshark not found in PATH or at %s", wiresharkPath)
+			}
+		}
+	}
+	cmdStr := fmt.Sprintf(`ssh %s "sudo tcpdump -i any -s0 -nnn -U not port 22 -w -" | "%s" -k -i -`, alias, wiresharkPath)
+	cmd := exec.Command("/bin/sh", "-c", cmdStr)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		s.logger.Errorw("wireshark tcpdump failed", "alias", alias, "error", err)
+		return err
+	}
+
+	if err := s.serverRepository.RecordSSH(alias); err != nil {
+		s.logger.Errorw("failed to record ssh metadata", "alias", alias, "error", err)
+	}
+
+	s.logger.Infow("tcpdump with ssh end", "alias", alias)
+
+	return nil
+}
+
 // SSHWithArgs runs system ssh with provided extra args (e.g., -L/-R/-D) for the given alias.
 func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
 	s.logger.Infow("ssh start (with args)", "alias", alias, "args", extraArgs)
