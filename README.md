@@ -59,6 +59,69 @@ With lazyssh, you can quickly navigate, connect, manage SSH keys, and work with 
     - Automatically append keys to `~/.ssh/authorized_keys` with correct permissions
 ---
 
+## 🚀 新增功能说明（custom_main）
+
+### 独立配置与自动迁移
+
+- LazySSH 不再直接修改 `~/.ssh/config`，而是使用 `~/.config/lazyssh` 作为独立配置目录。
+- 首次启动会导入现有的 `~/.ssh/config` 和 `~/.lazyssh/metadata.json`，原文件保持不变。
+- 所有 SSH 连接通过系统 OpenSSH 执行，并使用 `ssh -F <LazySSH 临时配置> <Host 别名>`，因此 ProxyJump、端口转发和其他 OpenSSH 配置仍然有效。
+- 已自动修复旧版本生成的 `Host alias#Added by lazyssh` 格式，避免数字别名被 OpenSSH 当作旧式 IPv4 简写解析。
+
+### 密码加密与 Git 迁移
+
+- 配置、元数据以及托管的公私钥会整体加密到 `~/.config/lazyssh/lazyssh.bundle.age`。
+- 本机密码保存在 `~/.config/lazyssh/.vault-password`，权限为 `0600`；启动时自动读取，无需每次输入。
+- `.vault-password`、运行锁和明文临时目录不会进入 Git，Git 只需要管理加密包及辅助配置。
+- 新设备克隆保险库后首次输入密码，验证成功后会生成该设备自己的本地密码文件。
+- 程序异常退出产生的失效锁会根据 PID 自动识别并清理，仍在运行的实例不会被误解锁。
+
+### 公私钥管理
+
+在服务器列表按 `K` 打开密钥管理界面：
+
+| 按键 | 功能 |
+| --- | --- |
+| `i` | 导入 OpenSSH 私钥并自动生成对应公钥信息 |
+| `o` | 导入公钥 |
+| `b` | 将选中的托管私钥绑定到当前服务器 |
+| `x` | 解除当前服务器的密钥绑定 |
+| `c` | 复制公钥 |
+| `e` | 将公钥或公私钥还原到指定路径 |
+| `d` | 删除未被服务器使用的托管密钥 |
+
+LazySSH 会校验密钥格式并显示类型及 SHA-256 指纹。连接绑定服务器时，会自动向 OpenSSH 传入 `IdentitiesOnly=yes` 和对应的临时私钥路径。
+
+### 非交互命令
+
+无需进入 TUI 即可列出服务器：
+
+```bash
+lazyssh list
+```
+
+示例输出：
+
+```text
+NO.  ALIAS     TARGET
+1    server-a  root@192.0.2.10:22
+2    server-b  admin@192.0.2.20:2202
+```
+
+使用相同序号直接连接：
+
+```bash
+lazyssh go 2
+```
+
+`list` 和 `go` 使用完全相同的稳定排序。`go` 继续使用专用 SSH 配置、服务器绑定的托管私钥以及连接元数据记录；`list` 是只读操作，不会无故改写加密包。
+
+### 远程抓包
+
+在 macOS 中按 `T` 可以通过 SSH 在远端执行 `tcpdump`，并将数据流交给本机 Wireshark 实时显示。可使用 `WIRESHARK_PATH` 环境变量指定 Wireshark 可执行文件。
+
+---
+
 ## 🔐 Security Notice
 
 LazySSH stores its portable state in `~/.config/lazyssh/lazyssh.bundle.age` using password-based age encryption.
@@ -207,22 +270,6 @@ make run
 | S     | Reverse sort order            |
 | q     | Quit                          |
 
-## Non-interactive commands
-
-List every server using stable, one-based indexes:
-
-```bash
-lazyssh list
-```
-
-Connect directly using an index from that list without opening the TUI:
-
-```bash
-lazyssh go 3
-```
-
-Both commands use the encrypted LazySSH vault, dedicated SSH config, and any managed key bound to the selected server. `lazyssh list` is read-only and does not rewrite the encrypted bundle.
-
 **In Server Form:**
 | Key    | Action               |
 | ------ | -------------------- |
@@ -289,8 +336,3 @@ If you find Lazyssh useful, please consider giving the repo a **star** ⭐️ an
 
 - Built with [tview](https://github.com/rivo/tview) and [tcell](https://github.com/gdamore/tcell).
 - Inspired by [k9s](https://github.com/derailed/k9s) and [lazydocker](https://github.com/jesseduffield/lazydocker).
-
-
-## 个人新增功能
-
-- T ：macOS用于本地wireshark，实时显示远程 tcpdump数据
