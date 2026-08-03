@@ -97,6 +97,16 @@ func (sl *ServerList) GetSelectedServer() (domain.Server, bool) {
 	return domain.Server{}, false
 }
 
+func (sl *ServerList) SelectAlias(alias string) bool {
+	for index, server := range sl.servers {
+		if server.Alias == alias {
+			sl.List.SetCurrentItem(index)
+			return true
+		}
+	}
+	return false
+}
+
 func (sl *ServerList) OnSelection(fn func(server domain.Server)) *ServerList {
 	sl.onSelection = fn
 	return sl

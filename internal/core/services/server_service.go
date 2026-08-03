@@ -16,6 +16,7 @@ package services
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -36,17 +37,56 @@ import (
 type serverService struct {
 	serverRepository ports.ServerRepository
 	logger           *zap.SugaredLogger
+	sshConfigPath    string
+	keyService       ports.KeyService
 
 	fwMu     sync.Mutex
 	forwards map[string][]*os.Process
 }
 
 // NewServerService creates a new instance of serverService.
-func NewServerService(logger *zap.SugaredLogger, sr ports.ServerRepository) ports.ServerService {
+func NewServerService(logger *zap.SugaredLogger, sr ports.ServerRepository, keyService ports.KeyService, sshConfigPath string) ports.ServerService {
 	return &serverService{
 		logger:           logger,
 		serverRepository: sr,
+		keyService:       keyService,
+		sshConfigPath:    sshConfigPath,
 	}
+}
+
+func (s *serverService) connectionArgs(alias string, extraArgs ...string) ([]string, error) {
+	args := s.sshArgs()
+	servers, err := s.serverRepository.ListServers(alias)
+	if err != nil {
+		return nil, fmt.Errorf("load server key binding: %w", err)
+	}
+	for _, server := range servers {
+		if server.Alias != alias || server.ManagedKeyID == "" {
+			continue
+		}
+		if s.keyService == nil {
+			return nil, fmt.Errorf("server %q uses managed key %q, but key management is unavailable", alias, server.ManagedKeyID)
+		}
+		keyPath, err := s.keyService.PrivateKeyPath(server.ManagedKeyID)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "-o", "IdentityFile=none", "-o", "IdentitiesOnly=yes", "-i", keyPath)
+		break
+	}
+	args = append(args, extraArgs...)
+	args = append(args, alias)
+	return args, nil
+}
+
+// sshArgs makes every SSH invocation use lazyssh's dedicated config file
+// instead of the user's default ~/.ssh/config.
+func (s *serverService) sshArgs(args ...string) []string {
+	sshArgs := make([]string, 0, len(args)+2)
+	if s.sshConfigPath != "" {
+		sshArgs = append(sshArgs, "-F", s.sshConfigPath)
+	}
+	return append(sshArgs, args...)
 }
 
 // ListServers returns a list of servers sorted with pinned on top.
@@ -153,10 +193,30 @@ func (s *serverService) SetPinned(alias string, pinned bool) error {
 	return err
 }
 
+func (s *serverService) SetManagedKey(alias, keyID string) error {
+	if keyID != "" {
+		if s.keyService == nil {
+			return errors.New("key management is unavailable")
+		}
+		if _, err := s.keyService.PrivateKeyPath(keyID); err != nil {
+			return err
+		}
+	}
+	if err := s.serverRepository.SetManagedKey(alias, keyID); err != nil {
+		s.logger.Errorw("failed to bind managed key", "alias", alias, "key_id", keyID, "error", err)
+		return err
+	}
+	return nil
+}
+
 // SSH starts an interactive SSH session to the given alias using the system's ssh client.
 func (s *serverService) SSH(alias string) error {
 	s.logger.Infow("ssh start", "alias", alias)
-	cmd := exec.Command("ssh", alias)
+	args, err := s.connectionArgs(alias)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("ssh", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -189,14 +249,39 @@ func (s *serverService) MACOSTcpDump(alias string) error {
 			}
 		}
 	}
-	cmdStr := fmt.Sprintf(`ssh %s "sudo tcpdump -i any -s0 -nnn -U not port 22 -w -" | "%s" -k -i -`, alias, wiresharkPath)
-	cmd := exec.Command("/bin/sh", "-c", cmdStr)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	sshArgs, err := s.connectionArgs(alias)
+	if err != nil {
+		return err
+	}
+	sshArgs = append(sshArgs, "sudo", "tcpdump", "-i", "any", "-s0", "-nnn", "-U", "not", "port", "22", "-w", "-")
+	sshCmd := exec.Command("ssh", sshArgs...)
+	wiresharkCmd := exec.Command(wiresharkPath, "-k", "-i", "-")
+	packetStream, err := sshCmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create tcpdump stream: %w", err)
+	}
+	sshCmd.Stdin = os.Stdin
+	sshCmd.Stderr = os.Stderr
+	wiresharkCmd.Stdin = packetStream
+	wiresharkCmd.Stdout = os.Stdout
+	wiresharkCmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := wiresharkCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start wireshark: %w", err)
+	}
+	if err := sshCmd.Start(); err != nil {
+		_ = wiresharkCmd.Process.Kill()
+		_ = wiresharkCmd.Wait()
+		return fmt.Errorf("failed to start remote tcpdump: %w", err)
+	}
+	if err := sshCmd.Wait(); err != nil {
+		_ = wiresharkCmd.Process.Kill()
+		_ = wiresharkCmd.Wait()
 		s.logger.Errorw("wireshark tcpdump failed", "alias", alias, "error", err)
+		return err
+	}
+	if err := wiresharkCmd.Wait(); err != nil {
+		s.logger.Errorw("wireshark failed", "alias", alias, "error", err)
 		return err
 	}
 
@@ -212,8 +297,10 @@ func (s *serverService) MACOSTcpDump(alias string) error {
 // SSHWithArgs runs system ssh with provided extra args (e.g., -L/-R/-D) for the given alias.
 func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
 	s.logger.Infow("ssh start (with args)", "alias", alias, "args", extraArgs)
-	args := append([]string{}, extraArgs...)
-	args = append(args, alias)
+	args, err := s.connectionArgs(alias, extraArgs...)
+	if err != nil {
+		return err
+	}
 	// #nosec G204
 	cmd := exec.Command("ssh", args...)
 	cmd.Stdin = os.Stdin
@@ -238,10 +325,13 @@ func (s *serverService) StartForward(alias string, extraArgs []string) (int, err
 	}
 	s.fwMu.Unlock()
 
-	extraArgs = append(extraArgs, "-N", alias)
+	sshArgs, err := s.connectionArgs(alias, append(extraArgs, "-N")...)
+	if err != nil {
+		return 0, err
+	}
 
 	// #nosec G204
-	cmd := exec.Command("ssh", extraArgs...)
+	cmd := exec.Command("ssh", sshArgs...)
 
 	// Detach from TTY: discard stdio
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
@@ -349,7 +439,7 @@ func (s *serverService) IsForwarding(alias string) bool {
 func (s *serverService) Ping(server domain.Server) (bool, time.Duration, error) {
 	start := time.Now()
 
-	host, port, ok := resolveSSHDestination(server.Alias)
+	host, port, ok := resolveSSHDestination(s.sshConfigPath, server.Alias)
 	if !ok {
 
 		host = strings.TrimSpace(server.Host)
@@ -373,14 +463,18 @@ func (s *serverService) Ping(server domain.Server) (bool, time.Duration, error) 
 	return true, time.Since(start), nil
 }
 
-// resolveSSHDestination uses `ssh -G <alias>` to extract HostName and Port from the user's SSH config.
+// resolveSSHDestination uses `ssh -F <config> -G <alias>` to extract HostName and Port.
 // Returns host, port, ok where ok=false if resolution failed.
-func resolveSSHDestination(alias string) (string, int, bool) {
+func resolveSSHDestination(configPath, alias string) (string, int, bool) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" {
 		return "", 0, false
 	}
-	cmd := exec.Command("ssh", "-G", alias)
+	args := []string{"-G", alias}
+	if configPath != "" {
+		args = append([]string{"-F", configPath}, args...)
+	}
+	cmd := exec.Command("ssh", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", 0, false

@@ -15,8 +15,19 @@
 package ssh_config_file
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 )
+
+func TestCreateHostSeparatesLazySSHComment(t *testing.T) {
+	repository := &Repository{}
+	host := repository.createHostFromServer(domain.Server{Alias: "example", Host: "192.0.2.1"})
+	if firstLine := strings.SplitN(host.String(), "\n", 2)[0]; firstLine != "Host example    #Added by lazyssh" {
+		t.Fatalf("host line = %q", firstLine)
+	}
+}
 
 func TestConvertCLIForwardToConfigFormat(t *testing.T) {
 	tests := []struct {

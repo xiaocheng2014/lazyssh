@@ -30,6 +30,7 @@ type ServerMetadata struct {
 	LastSeen string   `json:"last_seen,omitempty"`
 	PinnedAt string   `json:"pinned_at,omitempty"`
 	SSHCount int      `json:"ssh_count,omitempty"`
+	KeyID    string   `json:"key_id,omitempty"`
 }
 
 type metadataManager struct {
@@ -145,6 +146,17 @@ func (m *metadataManager) setPinned(alias string, pinned bool) error {
 		meta.PinnedAt = ""
 	}
 
+	metadata[alias] = meta
+	return m.saveAll(metadata)
+}
+
+func (m *metadataManager) setManagedKey(alias, keyID string) error {
+	metadata, err := m.loadAll()
+	if err != nil {
+		return fmt.Errorf("load metadata: %w", err)
+	}
+	meta := metadata[alias]
+	meta.KeyID = keyID
 	metadata[alias] = meta
 	return m.saveAll(metadata)
 }

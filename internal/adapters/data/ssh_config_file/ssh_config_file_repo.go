@@ -160,6 +160,11 @@ func (r *Repository) SetPinned(alias string, pinned bool) error {
 	return r.metadataManager.setPinned(alias, pinned)
 }
 
+// SetManagedKey binds a server alias to a key stored in lazyssh's encrypted vault.
+func (r *Repository) SetManagedKey(alias, keyID string) error {
+	return r.metadataManager.setManagedKey(alias, keyID)
+}
+
 // RecordSSH increments the SSH access count and updates the last seen timestamp for a server.
 func (r *Repository) RecordSSH(alias string) error {
 	return r.metadataManager.recordSSH(alias)

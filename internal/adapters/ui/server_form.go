@@ -2251,6 +2251,7 @@ func (sf *ServerForm) dataToServer(data ServerFormData) domain.Server {
 		server.PinnedAt = sf.original.PinnedAt
 		server.LastSeen = sf.original.LastSeen
 		server.SSHCount = sf.original.SSHCount
+		server.ManagedKeyID = sf.original.ManagedKeyID
 		// Also preserve Aliases (computed field)
 		server.Aliases = sf.original.Aliases
 	}

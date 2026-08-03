@@ -23,6 +23,7 @@ type Server struct {
 	User          string
 	Port          int
 	IdentityFiles []string
+	ManagedKeyID  string
 	Tags          []string
 	LastSeen      time.Time
 	PinnedAt      time.Time

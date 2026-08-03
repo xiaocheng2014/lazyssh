@@ -95,6 +95,12 @@ func (t *tui) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'T':
 		t.handleMACOSTcpDump()
 		return nil
+	case 'K':
+		t.showKeyManager()
+		return nil
+	case 'V':
+		t.showVaultManager()
+		return nil
 	}
 
 	if event.Key() == tcell.KeyEnter {
@@ -133,6 +139,15 @@ func (t *tui) handleSortReverse() {
 
 func (t *tui) handleCopyCommand() {
 	if server, ok := t.serverList.GetSelectedServer(); ok {
+		if server.ManagedKeyID != "" && t.keyService != nil {
+			keyPath, err := t.keyService.PrivateKeyPath(server.ManagedKeyID)
+			if err != nil {
+				t.showStatusTempColor("Failed to resolve managed key: "+err.Error(), "#FF6B6B")
+				return
+			}
+			server.IdentityFiles = []string{keyPath}
+			server.IdentitiesOnly = "yes"
+		}
 		cmd := BuildSSHCommand(server)
 		if err := clipboard.WriteAll(cmd); err == nil {
 			t.showStatusTemp("Copied: " + cmd)
