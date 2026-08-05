@@ -259,20 +259,37 @@ SSH into the selected server
 
 ## 📦 Installation
 
+### 自动发布流程
+
+`custom_main` 分支使用 Release Please 和 GoReleaser 自动管理版本：
+
+1. 推送符合 Conventional Commits 规范的提交后，GitHub Actions 会自动创建或更新 Release PR。
+2. 合并 Release PR 后，Actions 会自动创建语义化版本标签和 GitHub Release。
+3. Release 会包含 Linux、macOS、Windows 的 amd64/arm64 压缩包以及 `checksums.txt`。
+
+版本规则为：`fix:` 发布补丁版本，`feat:` 发布次版本，带 `!` 的破坏性变更发布主版本。整个流程使用仓库自带的 `GITHUB_TOKEN`，无需额外配置个人令牌。
+
 ### Option 1: Download Binary from Releases
 
 Download from [GitHub Releases](https://github.com/xiaocheng2014/lazyssh/releases). You can use the snippet below to automatically fetch the latest version for your OS/ARCH (Darwin/Linux and amd64/arm64 supported):
 
 ```bash
-# Detect latest version
+# Detect the platform name used by release archives
+OS=$(uname -s)
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=x86_64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+# Detect latest version and download the matching archive
 LATEST_TAG=$(curl -fsSL https://api.github.com/repos/xiaocheng2014/lazyssh/releases/latest | jq -r .tag_name)
-# Download the correct binary for your system
-curl -LJO "https://github.com/xiaocheng2014/lazyssh/releases/download/${LATEST_TAG}/lazyssh_$(uname)_$(uname -m).tar.gz"
-# Extract the binary
-tar -xzf lazyssh_$(uname)_$(uname -m).tar.gz
-# Move to /usr/local/bin or another directory in your PATH
+ARCHIVE="lazyssh_${OS}_${ARCH}.tar.gz"
+curl -fLO "https://github.com/xiaocheng2014/lazyssh/releases/download/${LATEST_TAG}/${ARCHIVE}"
+tar -xzf "${ARCHIVE}"
+
+# Move lazyssh to a directory in PATH
 sudo mv lazyssh /usr/local/bin/
-# enjoy!
 lazyssh
 ```
 

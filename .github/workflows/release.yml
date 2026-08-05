@@ -1,22 +1,62 @@
-name: release
+name: Automated Release
+
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - custom_main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: automated-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  goreleaser:
+  release-please:
+    name: Prepare or create release
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          target-branch: custom_main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish-binaries:
+    name: Build and upload binaries
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      - name: Setup Go
-        uses: actions/setup-go@v4
+      - name: Checkout release tag
+        uses: actions/checkout@v7
         with:
-          go-version: 1.22.x
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test release source
+        run: go test ./...
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@v7
         with:
-          version:  2.9.0
+          distribution: goreleaser
+          version: "~> v2"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

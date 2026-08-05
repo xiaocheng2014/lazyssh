@@ -40,4 +40,6 @@ jobs:
             cli
             config
             parser
+            main
+            release
           requireScope: false
