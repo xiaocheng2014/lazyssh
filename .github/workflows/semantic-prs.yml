@@ -41,5 +41,6 @@ jobs:
             config
             parser
             main
+            custom_main
             release
           requireScope: false
