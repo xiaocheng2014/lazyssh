@@ -194,6 +194,9 @@ func TestFieldValidatorPatterns(t *testing.T) {
 		{"Alias", "server-01", false},
 		{"Alias", "server_01", false},
 		{"Alias", "server.01", false},
+		{"Alias", "生产数据库", false},
+		{"Alias", "香港-服务器_01", false},
+		{"Alias", "生产 数据库", true},
 		{"Alias", "server@01", true},
 		{"Alias", "", true}, // Required field
 

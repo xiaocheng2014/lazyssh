@@ -1102,6 +1102,7 @@ func (sf *ServerForm) getDefaultValues() ServerFormData {
 			AddKeysToAgent: sf.original.AddKeysToAgent,
 			IdentityAgent:  sf.original.IdentityAgent,
 			// Password & Interactive
+			LoginPassword:                sf.original.LoginPassword,
 			PasswordAuthentication:       sf.original.PasswordAuthentication,
 			KbdInteractiveAuthentication: sf.original.KbdInteractiveAuthentication,
 			NumberOfPasswordPrompts:      sf.original.NumberOfPasswordPrompts,
@@ -1183,6 +1184,7 @@ func (sf *ServerForm) getDefaultValues() ServerFormData {
 		AddKeysToAgent:               "",
 		IdentityAgent:                "",
 		PasswordAuthentication:       "",
+		LoginPassword:                "",
 		KbdInteractiveAuthentication: "",
 		NumberOfPasswordPrompts:      "",
 		PreferredAuthentications:     "",
@@ -1503,6 +1505,8 @@ func (sf *ServerForm) createAuthenticationForm() {
 
 	// Password/Interactive authentication
 	form.AddTextView("\n[yellow]▶ Password & Interactive[-]", "", 0, 1, true, false)
+	loginPasswordField := sf.addInputFieldWithHelp(form, "LoginPassword:", "LoginPassword", defaultValues.LoginPassword, 40, "stored in the encrypted LazySSH vault")
+	loginPasswordField.SetMaskCharacter('*')
 
 	// PasswordAuthentication dropdown
 	passwordOptions := createOptionsWithDefault("PasswordAuthentication", []string{"", "yes", "no"})
@@ -1681,6 +1685,7 @@ type ServerFormData struct {
 	AddKeysToAgent string
 	IdentityAgent  string
 	// Password & Interactive
+	LoginPassword                string
 	PasswordAuthentication       string
 	KbdInteractiveAuthentication string
 	NumberOfPasswordPrompts      string
@@ -1753,6 +1758,19 @@ func (sf *ServerForm) getFormData() ServerFormData {
 		}
 		return ""
 	}
+	getFieldTextRaw := func(fieldName string) string {
+		for _, form := range sf.forms {
+			for i := 0; i < form.GetFormItemCount(); i++ {
+				if field, ok := form.GetFormItem(i).(*tview.InputField); ok {
+					label := strings.TrimSpace(field.GetLabel())
+					if strings.HasPrefix(stripColorTags(label), fieldName) {
+						return field.GetText()
+					}
+				}
+			}
+		}
+		return ""
+	}
 
 	// Helper function to get selected option from DropDown across all forms
 	getDropdownValue := func(fieldName string) string {
@@ -1805,6 +1823,7 @@ func (sf *ServerForm) getFormData() ServerFormData {
 		AddKeysToAgent: getDropdownValue("AddKeysToAgent:"),
 		IdentityAgent:  getFieldText("IdentityAgent:"),
 		// Password & Interactive
+		LoginPassword:                getFieldTextRaw("LoginPassword:"),
 		PasswordAuthentication:       getDropdownValue("PasswordAuthentication:"),
 		KbdInteractiveAuthentication: getDropdownValue("KbdInteractiveAuthentication:"),
 		NumberOfPasswordPrompts:      getFieldText("NumberOfPasswordPrompts:"),
@@ -2210,6 +2229,7 @@ func (sf *ServerForm) dataToServer(data ServerFormData) domain.Server {
 		AddKeysToAgent: data.AddKeysToAgent,
 		IdentityAgent:  data.IdentityAgent,
 		// Password & Interactive
+		LoginPassword:                data.LoginPassword,
 		PasswordAuthentication:       data.PasswordAuthentication,
 		KbdInteractiveAuthentication: data.KbdInteractiveAuthentication,
 		NumberOfPasswordPrompts:      data.NumberOfPasswordPrompts,

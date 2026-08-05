@@ -97,9 +97,9 @@ var fieldHelpData = map[string]FieldHelp{
 	// Basic fields
 	"Alias": {
 		Field:       "Alias",
-		Description: "A nickname or abbreviation for the host. This is what you type after 'ssh' command.",
+		Description: "服务器的别名或简称，支持中文等 Unicode 文字。连接时会作为 SSH Host 使用。",
 		Syntax:      "any_string_without_spaces",
-		Examples:    []string{"myserver", "prod-db", "dev-web-01"},
+		Examples:    []string{"生产数据库", "香港-服务器", "dev-web-01"},
 		Default:     "(required)",
 		Category:    "Basic",
 	},
@@ -254,6 +254,14 @@ var fieldHelpData = map[string]FieldHelp{
 		Syntax:      "yes | no",
 		Examples:    []string{"yes", "no"},
 		Default:     "yes",
+		Category:    "Authentication",
+	},
+	"LoginPassword": {
+		Field:       "LoginPassword",
+		Description: "由 LazySSH 记住的服务器登录密码。编辑配置时为明文，保存后随整个仓库加密。",
+		Syntax:      "password",
+		Examples:    []string{"server-login-password"},
+		Default:     "(not saved)",
 		Category:    "Authentication",
 	},
 	"PreferredAuthentications": {

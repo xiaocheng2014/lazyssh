@@ -14,7 +14,55 @@
 
 package domain
 
-import "time"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+	"time"
+)
+
+const internalSSHConnectionAliasPrefix = "lazyssh-internal-"
+
+// SSHConnectionAlias returns a command-line-safe OpenSSH destination. OpenSSH
+// accepts Unicode in Host patterns but rejects it as the destination argument,
+// so non-ASCII display aliases use a stable internal alias in the same Host
+// block.
+func SSHConnectionAlias(alias string) string {
+	if isNativeSSHConnectionAlias(alias) {
+		return alias
+	}
+	sum := sha256.Sum256([]byte(alias))
+	return fmt.Sprintf("%s%x", internalSSHConnectionAliasPrefix, sum[:8])
+}
+
+func IsInternalSSHConnectionAlias(alias string) bool {
+	if !strings.HasPrefix(alias, internalSSHConnectionAliasPrefix) || len(alias) != len(internalSSHConnectionAliasPrefix)+16 {
+		return false
+	}
+	for _, character := range alias[len(internalSSHConnectionAliasPrefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isNativeSSHConnectionAlias(alias string) bool {
+	if alias == "" || alias[0] == '-' {
+		return false
+	}
+	for index := 0; index < len(alias); index++ {
+		character := alias[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
 
 type Server struct {
 	Alias         string
@@ -67,6 +115,7 @@ type Server struct {
 	AddKeysToAgent string
 	IdentityAgent  string
 	// Password & Interactive
+	LoginPassword                string // LazySSH-managed plaintext inside the encrypted vault
 	PasswordAuthentication       string
 	KbdInteractiveAuthentication string // yes, no
 	NumberOfPasswordPrompts      string

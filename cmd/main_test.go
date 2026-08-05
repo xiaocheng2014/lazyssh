@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
 	"github.com/xiaocheng2014/lazyssh/internal/vault"
+	"go.uber.org/zap"
 )
 
 func TestWriteGitSupportFilesAlwaysIgnoresLocalPassword(t *testing.T) {
@@ -60,15 +62,24 @@ func TestServerAtIndex(t *testing.T) {
 	}
 }
 
-func TestRootCommandIncludesListAndGo(t *testing.T) {
+func TestRootCommandIncludesNonInteractiveCommands(t *testing.T) {
 	root := newRootCommand(nil)
-	for _, name := range []string{"list", "go"} {
+	for _, name := range []string{"list", "go", "edit", "password"} {
 		command, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if command.Name() != name {
 			t.Fatalf("command %q resolved to %q", name, command.Name())
+		}
+	}
+	for _, name := range []string{"test", "change"} {
+		command, _, err := root.Find([]string{"password", name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Name() != name {
+			t.Fatalf("password command %q resolved to %q", name, command.Name())
 		}
 	}
 }
@@ -100,5 +111,47 @@ func TestRepairLazySSHHostComments(t *testing.T) {
 	}
 	if repaired {
 		t.Fatal("already repaired config changed again")
+	}
+}
+
+func TestValidateSSHConfig(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("ssh is unavailable")
+	}
+	configPath := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(configPath, []byte("Host 生产数据库\n    HostName 192.0.2.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSSHConfig(configPath); err != nil {
+		t.Fatalf("valid SSH config rejected: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("Host invalid\n    NotARealSSHOption yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSSHConfig(configPath); err == nil {
+		t.Fatal("invalid SSH config accepted")
+	}
+}
+
+func TestPrepareEditedSSHConfigAddsInternalAliasForChineseHost(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("ssh is unavailable")
+	}
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	metadataPath := filepath.Join(directory, "metadata.json")
+	if err := os.WriteFile(configPath, []byte("Host 新增中文服务器\n    HostName 192.0.2.10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareEditedSSHConfig(zap.NewNop().Sugar(), configPath, metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Host 新增中文服务器 " + domain.SSHConnectionAlias("新增中文服务器")
+	if !strings.Contains(string(content), want) {
+		t.Fatalf("internal alias was not generated after edit:\n%s", content)
 	}
 }

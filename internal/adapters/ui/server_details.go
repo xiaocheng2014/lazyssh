@@ -66,6 +66,10 @@ func (sd *ServerDetails) UpdateServer(server domain.Server) {
 	if server.ManagedKeyID != "" {
 		serverKey = "managed:" + server.ManagedKeyID
 	}
+	savedPassword := "not saved"
+	if server.LoginPassword != "" {
+		savedPassword = "saved in encrypted vault"
+	}
 
 	pinnedStr := "true"
 	if server.PinnedAt.IsZero() {
@@ -86,9 +90,9 @@ func (sd *ServerDetails) UpdateServer(server domain.Server) {
 	}
 
 	text := fmt.Sprintf(
-		"[::b]%s[-]\n\n[::b]Basic Settings:[-]\n  Host: [white]%s[-]\n  User: [white]%s[-]\n  Port: [white]%s[-]\n  Key:  [white]%s[-]\n  Tags: %s\n  Pinned: [white]%s[-]\n  Last SSH: %s\n  SSH Count: [white]%d[-]\n",
+		"[::b]%s[-]\n\n[::b]Basic Settings:[-]\n  Host: [white]%s[-]\n  User: [white]%s[-]\n  Port: [white]%s[-]\n  Key:  [white]%s[-]\n  Password: [white]%s[-]\n  Tags: %s\n  Pinned: [white]%s[-]\n  Last SSH: %s\n  SSH Count: [white]%d[-]\n",
 		aliasText, hostText, userText, portText,
-		serverKey, tagsText, pinnedStr,
+		serverKey, savedPassword, tagsText, pinnedStr,
 		lastSeen, server.SSHCount)
 
 	// Advanced settings section (only show non-empty fields)

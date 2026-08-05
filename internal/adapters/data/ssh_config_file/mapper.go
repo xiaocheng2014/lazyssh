@@ -33,7 +33,7 @@ func (r *Repository) toDomainServer(cfg *ssh_config.Config) []domain.Server {
 		for _, pattern := range host.Patterns {
 			alias := pattern.String()
 			// Skip if alias contains wildcards (not a concrete Host)
-			if strings.ContainsAny(alias, "!*?[]") {
+			if strings.ContainsAny(alias, "!*?[]") || domain.IsInternalSSHConnectionAlias(alias) {
 				continue
 			}
 			aliases = append(aliases, alias)
@@ -49,12 +49,17 @@ func (r *Repository) toDomainServer(cfg *ssh_config.Config) []domain.Server {
 		}
 
 		for _, node := range host.Nodes {
-			kvNode, ok := node.(*ssh_config.KV)
-			if !ok {
-				continue
+			switch typed := node.(type) {
+			case *ssh_config.KV:
+				r.mapKVToServer(&server, typed)
+				if password, ok := loginPasswordFromComment(typed.Comment); ok {
+					server.LoginPassword = password
+				}
+			case *ssh_config.Empty:
+				if password, ok := loginPasswordFromComment(typed.Comment); ok {
+					server.LoginPassword = password
+				}
 			}
-
-			r.mapKVToServer(&server, kvNode)
 		}
 
 		servers = append(servers, server)

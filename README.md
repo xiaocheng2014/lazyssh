@@ -67,6 +67,7 @@ With lazyssh, you can quickly navigate, connect, manage SSH keys, and work with 
 - 首次启动会导入现有的 `~/.ssh/config` 和 `~/.lazyssh/metadata.json`，原文件保持不变。
 - 所有 SSH 连接通过系统 OpenSSH 执行，并使用 `ssh -F <LazySSH 临时配置> <Host 别名>`，因此 ProxyJump、端口转发和其他 OpenSSH 配置仍然有效。
 - 已自动修复旧版本生成的 `Host alias#Added by lazyssh` 格式，避免数字别名被 OpenSSH 当作旧式 IPv4 简写解析。
+- 服务器 Alias 支持中文。由于 OpenSSH 不接受中文作为命令行目标，LazySSH 会在同一个 `Host` 配置块中自动维护稳定的 `lazyssh-internal-*` 英文连接别名；列表和界面仍只显示用户设置的中文 Alias。
 
 ### 密码加密与 Git 迁移
 
@@ -74,7 +75,8 @@ With lazyssh, you can quickly navigate, connect, manage SSH keys, and work with 
 - 本机密码保存在 `~/.config/lazyssh/.vault-password`，权限为 `0600`；启动时自动读取，无需每次输入。
 - `.vault-password`、运行锁和明文临时目录不会进入 Git，Git 只需要管理加密包及辅助配置。
 - 新设备克隆保险库后首次输入密码，验证成功后会生成该设备自己的本地密码文件。
-- 程序异常退出产生的失效锁会根据 PID 自动识别并清理，仍在运行的实例不会被误解锁。
+- 支持同时打开多个 LazySSH 窗口；只有保存加密仓库时才会短暂加锁。程序异常退出产生的失效写锁会根据 PID 自动识别并清理。
+- 如果旧窗口基于过期配置尝试保存，LazySSH 会拒绝覆盖并提示重新打开该窗口，保护其他窗口已经保存的修改。
 
 ### 公私钥管理
 
@@ -116,6 +118,46 @@ lazyssh go 2
 
 `list` 和 `go` 使用完全相同的稳定排序。`go` 继续使用专用 SSH 配置、服务器绑定的托管私钥以及连接元数据记录；`list` 是只读操作，不会无故改写加密包。
 
+### 直接编辑配置与密码管理
+
+直接编辑保险库中的服务器配置：
+
+```bash
+lazyssh edit
+```
+
+LazySSH 会依次使用 `$VISUAL`、`$EDITOR` 或默认的 `vi` 打开临时解密的 OpenSSH 配置。编辑器退出后会调用系统 OpenSSH 校验语法；只有配置合法且内容发生变化时才重新加密保存，编辑器异常退出或语法错误不会覆盖原加密包。
+
+在 TUI 中按 `V` 可以打开密码管理界面，支持测试密码和修改密码。也可以使用命令行：
+
+```bash
+# 输入一个密码并测试是否能够解密当前保险库
+lazyssh password test
+
+# 修改保险库密码，并同步更新本机 .vault-password
+lazyssh password change
+```
+
+密码通过终端隐藏输入，不会显示在命令参数、终端回显或日志中。
+
+### 记住服务器登录密码
+
+对于只能使用密码认证的服务器，可以在新增/编辑服务器的 `Authentication` 页填写 `LoginPassword`。该字段在界面中以掩码显示，服务器详情只显示是否已保存，不会显示密码内容。
+
+也可以使用 `lazyssh edit` 直接在对应的 `Host` 配置块中编辑明文密码：
+
+```sshconfig
+Host 生产数据库
+    HostName 192.0.2.10
+    User root
+    PasswordAuthentication yes
+    # LazySSH-Password: server-login-password
+```
+
+`LazySSH-Password` 是 LazySSH 专用注释，OpenSSH 会忽略它。编辑期间配置位于权限受限的临时目录中，因此密码是可读的明文；退出编辑器后，配置、元数据、托管密钥和服务器密码会一起重新加密到 `lazyssh.bundle.age`，Git 中只保存加密包。
+
+连接时 LazySSH 通过 `SSH_ASKPASS` 将密码交给系统 OpenSSH。密码不会写入命令行参数、环境变量值或日志；使用完毕后，权限为 `0600` 的临时密码文件会立即清除。清空 `LoginPassword` 或删除 `LazySSH-Password` 注释即可恢复为 SSH 自己的交互式密码提示。
+
 ### 远程抓包
 
 在 macOS 中按 `T` 可以通过 SSH 在远端执行 `tcpdump`，并将数据流交给本机 Wireshark 实时显示。可使用 `WIRESHARK_PATH` 环境变量指定 Wireshark 可执行文件。
@@ -141,6 +183,8 @@ LazySSH stores its portable state in `~/.config/lazyssh/lazyssh.bundle.age` usin
 - On first use, LazySSH imports the existing `~/.ssh/config` and metadata into the encrypted bundle without changing or deleting the original files.
 
 - Temporary configuration, metadata, and managed key files use owner-only permissions.
+
+- Saved server login passwords are plaintext only inside the unlocked temporary SSH config. Git stores them only as part of the password-encrypted vault bundle.
 
 
 ## 🛡️ Config Safety: Non‑destructive writes and backups
@@ -257,7 +301,7 @@ make run
 | ↑↓/jk | Navigate servers              |
 | Enter | SSH into selected server      |
 | K     | Manage/import/restore keys    |
-| V     | View vault/change password    |
+| V     | Test/change vault password    |
 | c     | Copy SSH command to clipboard |
 | g     | Ping selected server          |
 | r     | Refresh background data       |

@@ -28,6 +28,7 @@ const (
 	BackupSuffix       = "lazyssh.backup"
 	SSHConfigPerms     = 0o600
 	OriginalBackupName = "config.original.backup"
+	passwordCommentKey = "LazySSH-Password:"
 )
 
 // filterServers filters servers based on the query string.
@@ -93,10 +94,13 @@ func (r *Repository) hostContainsPattern(host *ssh_config.Host, target string) b
 
 // createHostFromServer creates a new ssh_config.Host from a domain.Server.
 func (r *Repository) createHostFromServer(server domain.Server) *ssh_config.Host {
+	patterns := []*ssh_config.Pattern{{Str: server.Alias}}
+	connectionAlias := domain.SSHConnectionAlias(server.Alias)
+	if connectionAlias != server.Alias {
+		patterns = append(patterns, &ssh_config.Pattern{Str: connectionAlias})
+	}
 	host := &ssh_config.Host{
-		Patterns: []*ssh_config.Pattern{
-			{Str: server.Alias},
-		},
+		Patterns:           patterns,
 		Nodes:              make([]ssh_config.Node, 0),
 		EOLComment:         "Added by lazyssh",
 		SpaceBeforeComment: strings.Repeat(" ", 4),
@@ -137,7 +141,11 @@ func (r *Repository) createHostFromServer(server domain.Server) *ssh_config.Host
 	r.addKVNodeIfNotEmpty(host, "PubkeyAuthentication", server.PubkeyAuthentication)
 	r.addKVNodeIfNotEmpty(host, "PubkeyAcceptedAlgorithms", server.PubkeyAcceptedAlgorithms)
 	r.addKVNodeIfNotEmpty(host, "HostbasedAcceptedAlgorithms", server.HostbasedAcceptedAlgorithms)
-	r.addKVNodeIfNotEmpty(host, "PasswordAuthentication", server.PasswordAuthentication)
+	passwordAuthentication := server.PasswordAuthentication
+	if server.LoginPassword != "" {
+		passwordAuthentication = "yes"
+	}
+	r.addKVNodeIfNotEmpty(host, "PasswordAuthentication", passwordAuthentication)
 	r.addKVNodeIfNotEmpty(host, "PreferredAuthentications", server.PreferredAuthentications)
 	r.addKVNodeIfNotEmpty(host, "IdentitiesOnly", server.IdentitiesOnly)
 	r.addKVNodeIfNotEmpty(host, "AddKeysToAgent", server.AddKeysToAgent)
@@ -184,8 +192,119 @@ func (r *Repository) createHostFromServer(server domain.Server) *ssh_config.Host
 
 	// Debugging
 	r.addKVNodeIfNotEmpty(host, "LogLevel", server.LogLevel)
+	r.setLoginPasswordComment(host, server.LoginPassword)
 
 	return host
+}
+
+func ensureHostConnectionAlias(host *ssh_config.Host) bool {
+	primaryAlias := ""
+	for _, pattern := range host.Patterns {
+		alias := pattern.String()
+		if domain.IsInternalSSHConnectionAlias(alias) || strings.ContainsAny(alias, "!*?[]") {
+			continue
+		}
+		primaryAlias = alias
+		break
+	}
+	if primaryAlias == "" {
+		return false
+	}
+
+	desired := domain.SSHConnectionAlias(primaryAlias)
+	newPatterns := make([]*ssh_config.Pattern, 0, len(host.Patterns)+1)
+	changed := false
+	for _, pattern := range host.Patterns {
+		alias := pattern.String()
+		if domain.IsInternalSSHConnectionAlias(alias) {
+			if desired == primaryAlias || alias != desired {
+				changed = true
+				continue
+			}
+		}
+		newPatterns = append(newPatterns, pattern)
+	}
+	if desired != primaryAlias {
+		found := false
+		for _, pattern := range newPatterns {
+			if pattern.String() == desired {
+				found = true
+				break
+			}
+		}
+		if !found {
+			newPatterns = append(newPatterns, &ssh_config.Pattern{Str: desired})
+			changed = true
+		}
+	}
+	if changed {
+		host.Patterns = newPatterns
+	}
+	return changed
+}
+
+func loginPasswordFromComment(comment string) (string, bool) {
+	markerIndex := strings.Index(strings.ToLower(comment), strings.ToLower(passwordCommentKey))
+	if markerIndex < 0 {
+		return "", false
+	}
+	password := comment[markerIndex+len(passwordCommentKey):]
+	if strings.HasPrefix(password, " ") {
+		password = password[1:]
+	}
+	return password, true
+}
+
+func updateLoginPasswordComment(comment, password string) string {
+	markerIndex := strings.Index(strings.ToLower(comment), strings.ToLower(passwordCommentKey))
+	base := comment
+	if markerIndex >= 0 {
+		base = strings.TrimRight(comment[:markerIndex], " \t;|")
+	}
+	if password == "" {
+		return base
+	}
+	if base != "" {
+		return base + " | " + passwordCommentKey + " " + password
+	}
+	return " " + passwordCommentKey + " " + password
+}
+
+func (r *Repository) setLoginPasswordComment(host *ssh_config.Host, password string) {
+	found := false
+	for _, node := range host.Nodes {
+		switch typed := node.(type) {
+		case *ssh_config.KV:
+			if _, ok := loginPasswordFromComment(typed.Comment); ok {
+				if !found {
+					typed.Comment = updateLoginPasswordComment(typed.Comment, password)
+					found = true
+				} else {
+					typed.Comment = updateLoginPasswordComment(typed.Comment, "")
+				}
+			}
+		case *ssh_config.Empty:
+			if _, ok := loginPasswordFromComment(typed.Comment); ok {
+				if !found {
+					typed.Comment = updateLoginPasswordComment(typed.Comment, password)
+					found = true
+				} else {
+					typed.Comment = updateLoginPasswordComment(typed.Comment, "")
+				}
+			}
+		}
+	}
+	if found || password == "" {
+		return
+	}
+
+	for _, node := range host.Nodes {
+		if kv, ok := node.(*ssh_config.KV); ok && strings.EqualFold(kv.Key, "PasswordAuthentication") {
+			kv.SpaceAfterValue = "    "
+			kv.Comment = updateLoginPasswordComment(kv.Comment, password)
+			return
+		}
+	}
 }
 
 // addKVNodeIfNotEmpty adds a key-value node to the host if the value is not empty.
@@ -266,6 +385,10 @@ func (r *Repository) updateHostNodes(host *ssh_config.Host, newServer domain.Ser
 		portValue = fmt.Sprintf("%d", newServer.Port)
 	}
 
+	passwordAuthentication := newServer.PasswordAuthentication
+	if newServer.LoginPassword != "" {
+		passwordAuthentication = "yes"
+	}
 	updates := map[string]string{
 		"hostname":                        newServer.Host,
 		"user":                            newServer.User,
@@ -290,7 +413,7 @@ func (r *Repository) updateHostNodes(host *ssh_config.Host, newServer domain.Ser
 		"clearallforwardings":             newServer.ClearAllForwardings,
 		"gatewayports":                    newServer.GatewayPorts,
 		"pubkeyauthentication":            newServer.PubkeyAuthentication,
-		"passwordauthentication":          newServer.PasswordAuthentication,
+		"passwordauthentication":          passwordAuthentication,
 		"preferredauthentications":        newServer.PreferredAuthentications,
 		"pubkeyacceptedalgorithms":        newServer.PubkeyAcceptedAlgorithms,
 		"pubkeyacceptedkeytypes":          newServer.PubkeyAcceptedAlgorithms, // Deprecated alias (since OpenSSH 8.5)
@@ -374,6 +497,8 @@ func (r *Repository) updateHostNodes(host *ssh_config.Host, newServer domain.Ser
 	for _, env := range newServer.SetEnv {
 		r.addKVNodeIfNotEmpty(host, "SetEnv", env)
 	}
+
+	r.setLoginPasswordComment(host, newServer.LoginPassword)
 }
 
 // updateOrAddKVNode updates an existing key-value node or adds a new one if it doesn't exist.

@@ -21,8 +21,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -48,6 +50,13 @@ var (
 )
 
 func main() {
+	if handled, err := services.HandleSSHAskpass(os.Args[1:], os.Stdout); handled {
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -69,7 +78,7 @@ func run() error {
 func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   ui.AppName,
-		Short: "Lazy SSH server picker TUI",
+		Short: "SSH 服务器管理与快捷连接工具",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home, err := userHome()
@@ -80,10 +89,44 @@ func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 		},
 	}
 	rootCmd.SilenceUsage = true
+	passwordCmd := &cobra.Command{
+		Use:   "password",
+		Short: "测试或修改加密仓库密码",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	passwordCmd.AddCommand(
+		&cobra.Command{
+			Use:   "test",
+			Short: "测试密码是否能够解密配置仓库",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				home, err := userHome()
+				if err != nil {
+					return err
+				}
+				return runPasswordTest(home, cmd.OutOrStdout())
+			},
+		},
+		&cobra.Command{
+			Use:   "change",
+			Short: "修改加密密码并更新本地密码文件",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				home, err := userHome()
+				if err != nil {
+					return err
+				}
+				return runPasswordChange(home, cmd.OutOrStdout())
+			},
+		},
+	)
 	rootCmd.AddCommand(
 		&cobra.Command{
 			Use:   "list",
-			Short: "List all SSH servers with stable numeric indexes",
+			Short: "列出所有 SSH 服务器及其固定序号",
 			Args:  cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, args []string) error {
 				home, err := userHome()
@@ -95,7 +138,7 @@ func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 		},
 		&cobra.Command{
 			Use:   "go <index>",
-			Short: "SSH directly to the server at an index from lazyssh list",
+			Short: "根据 lazyssh list 中的序号直接连接服务器",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				home, err := userHome()
@@ -105,6 +148,19 @@ func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 				return runGo(log, home, args[0])
 			},
 		},
+		&cobra.Command{
+			Use:   "edit",
+			Short: "使用编辑器修改 SSH 服务器配置",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				home, err := userHome()
+				if err != nil {
+					return err
+				}
+				return runEdit(log, home, cmd.OutOrStdout())
+			},
+		},
+		passwordCmd,
 	)
 	return rootCmd
 }
@@ -121,6 +177,7 @@ type runtimeServices struct {
 	manager       *vault.Manager
 	serverService ports.ServerService
 	keyService    ports.KeyService
+	sshConfigPath string
 }
 
 func openRuntime(log *zap.SugaredLogger, home string) (*runtimeServices, error) {
@@ -142,10 +199,21 @@ func openRuntime(log *zap.SugaredLogger, home string) (*runtimeServices, error) 
 	}
 	metaDataFile := manager.Path(vault.MetadataName)
 	baseRepo := ssh_config_file.NewRepository(log, sshConfigFile, metaDataFile)
+	connectionAliasesChanged, err := baseRepo.EnsureConnectionAliases()
+	if err != nil {
+		_ = manager.CloseReadOnly()
+		return nil, err
+	}
+	if connectionAliasesChanged {
+		if err := manager.Save(); err != nil {
+			_ = manager.CloseReadOnly()
+			return nil, fmt.Errorf("save internal SSH connection aliases: %w", err)
+		}
+	}
 	serverRepo := data_adapter.NewSyncingRepository(baseRepo, manager.Save)
 	keyService := services.NewKeyService(manager.Path(vault.KeysDirName), manager.Path("keys.json"), manager.Save)
 	serverService := services.NewServerService(log, serverRepo, keyService, sshConfigFile)
-	return &runtimeServices{manager: manager, serverService: serverService, keyService: keyService}, nil
+	return &runtimeServices{manager: manager, serverService: serverService, keyService: keyService, sshConfigPath: sshConfigFile}, nil
 }
 
 func repairLazySSHHostComments(configPath string) (bool, error) {
@@ -240,7 +308,7 @@ func runTUI(log *zap.SugaredLogger, home string) error {
 	application := ui.NewTUI(log, runtime.serverService, runtime.keyService, runtime.manager, version, gitCommit)
 
 	runErr := application.Run()
-	closeErr := runtime.manager.Close()
+	closeErr := runtime.manager.CloseReadOnly()
 	return errors.Join(runErr, closeErr)
 }
 
@@ -270,6 +338,125 @@ func runGo(log *zap.SugaredLogger, home, indexValue string) error {
 		}
 	}
 	return errors.Join(operationErr, runtime.manager.CloseReadOnly())
+}
+
+func runEdit(log *zap.SugaredLogger, home string, output io.Writer) error {
+	runtimeServices, err := openRuntime(log, home)
+	if err != nil {
+		return err
+	}
+	before, operationErr := os.ReadFile(runtimeServices.sshConfigPath)
+	if os.IsNotExist(operationErr) {
+		before = nil
+		operationErr = nil
+	}
+	if operationErr == nil {
+		operationErr = launchEditor(runtimeServices.sshConfigPath)
+	}
+	if operationErr == nil {
+		var after []byte
+		after, operationErr = os.ReadFile(runtimeServices.sshConfigPath)
+		if operationErr == nil && !bytes.Equal(before, after) {
+			operationErr = prepareEditedSSHConfig(log, runtimeServices.sshConfigPath, runtimeServices.manager.Path(vault.MetadataName))
+			if operationErr == nil {
+				operationErr = runtimeServices.manager.Save()
+				if operationErr == nil {
+					_, operationErr = fmt.Fprintln(output, "SSH 服务器配置已保存到加密仓库。")
+				}
+			}
+		} else if operationErr == nil {
+			_, operationErr = fmt.Fprintln(output, "SSH 服务器配置没有变化。")
+		}
+	}
+	return errors.Join(operationErr, runtimeServices.manager.CloseReadOnly())
+}
+
+func prepareEditedSSHConfig(log *zap.SugaredLogger, configPath, metadataPath string) error {
+	if err := validateSSHConfig(configPath); err != nil {
+		return err
+	}
+	repository := ssh_config_file.NewRepository(log, configPath, metadataPath)
+	changed, err := repository.EnsureConnectionAliases()
+	if err != nil {
+		return err
+	}
+	if changed {
+		return validateSSHConfig(configPath)
+	}
+	return nil
+}
+
+func launchEditor(configPath string) error {
+	editorSpec := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editorSpec == "" {
+		editorSpec = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editorSpec == "" {
+		if runtime.GOOS == "windows" {
+			editorSpec = "notepad"
+		} else {
+			editorSpec = "vi"
+		}
+	}
+	parts := strings.Fields(editorSpec)
+	if len(parts) == 0 {
+		return errors.New("编辑器命令不能为空")
+	}
+	args := append(append([]string(nil), parts[1:]...), configPath)
+	// #nosec G204 -- VISUAL/EDITOR is an explicit user-controlled local command.
+	command := exec.Command(parts[0], args...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("运行编辑器 %q：%w", editorSpec, err)
+	}
+	return nil
+}
+
+func validateSSHConfig(configPath string) error {
+	command := exec.Command("ssh", "-G", "-F", configPath, "lazyssh-config-validation")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("SSH 配置格式错误，修改未保存：%s", message)
+	}
+	return nil
+}
+
+func runPasswordTest(home string, output io.Writer) error {
+	manager, err := openVault(home)
+	if err != nil {
+		return err
+	}
+	password, operationErr := readPassword("请输入要测试的加密密码：")
+	if operationErr == nil {
+		defer clearBytes(password)
+		operationErr = manager.VerifyPassword(password)
+		if operationErr == nil {
+			_, operationErr = fmt.Fprintln(output, "密码正确，可以正常解密配置仓库。")
+		}
+	}
+	return errors.Join(operationErr, manager.CloseReadOnly())
+}
+
+func runPasswordChange(home string, output io.Writer) error {
+	manager, err := openVault(home)
+	if err != nil {
+		return err
+	}
+	password, operationErr := readConfirmedPassword("请输入新密码（至少 10 个字符）：", "请再次输入新密码：")
+	if operationErr == nil {
+		defer clearBytes(password)
+		operationErr = manager.ChangePassword(password)
+		if operationErr == nil {
+			_, operationErr = fmt.Fprintln(output, "加密密码和本地密码文件已更新。")
+		}
+	}
+	return errors.Join(operationErr, manager.CloseReadOnly())
 }
 
 func writeServerList(output io.Writer, servers []domain.Server) error {
@@ -353,15 +540,19 @@ func readPassword(prompt string) ([]byte, error) {
 }
 
 func createVaultPassword() ([]byte, error) {
-	password, err := readPassword("Create vault password (minimum 10 characters): ")
+	return readConfirmedPassword("请创建加密密码（至少 10 个字符）：", "请再次输入加密密码：")
+}
+
+func readConfirmedPassword(passwordPrompt, confirmationPrompt string) ([]byte, error) {
+	password, err := readPassword(passwordPrompt)
 	if err != nil {
 		return nil, err
 	}
 	if len(password) < 10 || strings.TrimSpace(string(password)) == "" {
 		clearBytes(password)
-		return nil, errors.New("vault password must contain at least 10 characters")
+		return nil, errors.New("加密密码至少需要 10 个字符")
 	}
-	confirmation, err := readPassword("Confirm vault password: ")
+	confirmation, err := readPassword(confirmationPrompt)
 	if err != nil {
 		clearBytes(password)
 		return nil, err
@@ -369,7 +560,7 @@ func createVaultPassword() ([]byte, error) {
 	defer clearBytes(confirmation)
 	if !bytes.Equal(password, confirmation) {
 		clearBytes(password)
-		return nil, errors.New("vault passwords do not match")
+		return nil, errors.New("两次输入的加密密码不一致")
 	}
 	return password, nil
 }

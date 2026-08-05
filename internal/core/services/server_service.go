@@ -55,28 +55,41 @@ func NewServerService(logger *zap.SugaredLogger, sr ports.ServerRepository, keyS
 }
 
 func (s *serverService) connectionArgs(alias string, extraArgs ...string) ([]string, error) {
+	args, _, err := s.connectionSpec(alias, extraArgs...)
+	return args, err
+}
+
+func (s *serverService) connectionSpec(alias string, extraArgs ...string) ([]string, string, error) {
 	args := s.sshArgs()
 	servers, err := s.serverRepository.ListServers(alias)
 	if err != nil {
-		return nil, fmt.Errorf("load server key binding: %w", err)
+		return nil, "", fmt.Errorf("load server authentication: %w", err)
 	}
+	loginPassword := ""
 	for _, server := range servers {
-		if server.Alias != alias || server.ManagedKeyID == "" {
+		if server.Alias != alias {
 			continue
 		}
+		loginPassword = server.LoginPassword
+		if server.ManagedKeyID == "" {
+			break
+		}
 		if s.keyService == nil {
-			return nil, fmt.Errorf("server %q uses managed key %q, but key management is unavailable", alias, server.ManagedKeyID)
+			return nil, "", fmt.Errorf("server %q uses managed key %q, but key management is unavailable", alias, server.ManagedKeyID)
 		}
 		keyPath, err := s.keyService.PrivateKeyPath(server.ManagedKeyID)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		args = append(args, "-o", "IdentityFile=none", "-o", "IdentitiesOnly=yes", "-i", keyPath)
 		break
 	}
+	if loginPassword != "" {
+		args = append(args, "-o", "BatchMode=no", "-o", "PasswordAuthentication=yes")
+	}
 	args = append(args, extraArgs...)
-	args = append(args, alias)
-	return args, nil
+	args = append(args, domain.SSHConnectionAlias(alias))
+	return args, loginPassword, nil
 }
 
 // sshArgs makes every SSH invocation use lazyssh's dedicated config file
@@ -118,11 +131,17 @@ func validateServer(srv domain.Server) error {
 	if strings.TrimSpace(srv.Alias) == "" {
 		return fmt.Errorf("alias is required")
 	}
-	if ok, _ := regexp.MatchString(`^[A-Za-z0-9_.-]+$`, srv.Alias); !ok {
-		return fmt.Errorf("alias may contain letters, digits, dot, dash, underscore")
+	if ok, _ := regexp.MatchString(`^[\p{L}\p{M}\p{N}_.-]+$`, srv.Alias); !ok {
+		return fmt.Errorf("alias may contain Unicode letters, digits, dots, dashes, and underscores")
+	}
+	if domain.IsInternalSSHConnectionAlias(srv.Alias) {
+		return fmt.Errorf("alias uses a reserved LazySSH internal connection name")
 	}
 	if strings.TrimSpace(srv.Host) == "" {
 		return fmt.Errorf("Host/IP is required")
+	}
+	if strings.ContainsAny(srv.LoginPassword, "\x00\r\n") {
+		return fmt.Errorf("saved server password must not contain NUL or newline characters")
 	}
 	if ip := net.ParseIP(srv.Host); ip == nil {
 		if strings.Contains(srv.Host, " ") {
@@ -152,12 +171,12 @@ func validateServer(srv domain.Server) error {
 // UpdateServer updates an existing server with new details.
 func (s *serverService) UpdateServer(server domain.Server, newServer domain.Server) error {
 	if err := validateServer(newServer); err != nil {
-		s.logger.Warnw("validation failed on update", "error", err, "server", newServer)
+		s.logger.Warnw("validation failed on update", "error", err, "alias", newServer.Alias)
 		return err
 	}
 	err := s.serverRepository.UpdateServer(server, newServer)
 	if err != nil {
-		s.logger.Errorw("failed to update server", "error", err, "server", server)
+		s.logger.Errorw("failed to update server", "error", err, "alias", server.Alias)
 	}
 	return err
 }
@@ -165,12 +184,12 @@ func (s *serverService) UpdateServer(server domain.Server, newServer domain.Serv
 // AddServer adds a new server to the repository.
 func (s *serverService) AddServer(server domain.Server) error {
 	if err := validateServer(server); err != nil {
-		s.logger.Warnw("validation failed on add", "error", err, "server", server)
+		s.logger.Warnw("validation failed on add", "error", err, "alias", server.Alias)
 		return err
 	}
 	err := s.serverRepository.AddServer(server)
 	if err != nil {
-		s.logger.Errorw("failed to add server", "error", err, "server", server)
+		s.logger.Errorw("failed to add server", "error", err, "alias", server.Alias)
 	}
 	return err
 }
@@ -179,7 +198,7 @@ func (s *serverService) AddServer(server domain.Server) error {
 func (s *serverService) DeleteServer(server domain.Server) error {
 	err := s.serverRepository.DeleteServer(server)
 	if err != nil {
-		s.logger.Errorw("failed to delete server", "error", err, "server", server)
+		s.logger.Errorw("failed to delete server", "error", err, "alias", server.Alias)
 	}
 	return err
 }
@@ -212,17 +231,22 @@ func (s *serverService) SetManagedKey(alias, keyID string) error {
 // SSH starts an interactive SSH session to the given alias using the system's ssh client.
 func (s *serverService) SSH(alias string) error {
 	s.logger.Infow("ssh start", "alias", alias)
-	args, err := s.connectionArgs(alias)
+	args, loginPassword, err := s.connectionSpec(alias)
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("ssh", args...)
+	cmd, cleanup, err := newSSHCommand(args, loginPassword)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		s.logger.Errorw("ssh command failed", "alias", alias, "error", err)
-		return err
+	runErr := cmd.Run()
+	cleanup()
+	if runErr != nil {
+		s.logger.Errorw("ssh command failed", "alias", alias, "error", runErr)
+		return runErr
 	}
 
 	if err := s.serverRepository.RecordSSH(alias); err != nil {
@@ -249,12 +273,16 @@ func (s *serverService) MACOSTcpDump(alias string) error {
 			}
 		}
 	}
-	sshArgs, err := s.connectionArgs(alias)
+	sshArgs, loginPassword, err := s.connectionSpec(alias)
 	if err != nil {
 		return err
 	}
 	sshArgs = append(sshArgs, "sudo", "tcpdump", "-i", "any", "-s0", "-nnn", "-U", "not", "port", "22", "-w", "-")
-	sshCmd := exec.Command("ssh", sshArgs...)
+	sshCmd, cleanup, err := newSSHCommand(sshArgs, loginPassword)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	wiresharkCmd := exec.Command(wiresharkPath, "-k", "-i", "-")
 	packetStream, err := sshCmd.StdoutPipe()
 	if err != nil {
@@ -297,18 +325,23 @@ func (s *serverService) MACOSTcpDump(alias string) error {
 // SSHWithArgs runs system ssh with provided extra args (e.g., -L/-R/-D) for the given alias.
 func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
 	s.logger.Infow("ssh start (with args)", "alias", alias, "args", extraArgs)
-	args, err := s.connectionArgs(alias, extraArgs...)
+	args, loginPassword, err := s.connectionSpec(alias, extraArgs...)
 	if err != nil {
 		return err
 	}
 	// #nosec G204
-	cmd := exec.Command("ssh", args...)
+	cmd, cleanup, err := newSSHCommand(args, loginPassword)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		s.logger.Errorw("ssh (with args) failed", "alias", alias, "error", err)
-		return err
+	runErr := cmd.Run()
+	cleanup()
+	if runErr != nil {
+		s.logger.Errorw("ssh (with args) failed", "alias", alias, "error", runErr)
+		return runErr
 	}
 	if err := s.serverRepository.RecordSSH(alias); err != nil {
 		s.logger.Errorw("failed to record ssh metadata", "alias", alias, "error", err)
@@ -325,17 +358,21 @@ func (s *serverService) StartForward(alias string, extraArgs []string) (int, err
 	}
 	s.fwMu.Unlock()
 
-	sshArgs, err := s.connectionArgs(alias, append(extraArgs, "-N")...)
+	sshArgs, loginPassword, err := s.connectionSpec(alias, append(extraArgs, "-N")...)
 	if err != nil {
 		return 0, err
 	}
 
 	// #nosec G204
-	cmd := exec.Command("ssh", sshArgs...)
+	cmd, cleanupPassword, err := newSSHCommand(sshArgs, loginPassword)
+	if err != nil {
+		return 0, err
+	}
 
 	// Detach from TTY: discard stdio
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
+		cleanupPassword()
 		return 0, fmt.Errorf("failed to open devnull: %w", err)
 	}
 	defer func() {
@@ -353,11 +390,13 @@ func (s *serverService) StartForward(alias string, extraArgs []string) (int, err
 	cmd.SysProcAttr = sysProcAttr
 
 	if err := cmd.Start(); err != nil {
+		cleanupPassword()
 		return 0, fmt.Errorf("failed to start ssh: %w", err)
 	}
 
 	proc := cmd.Process
 	if proc == nil {
+		cleanupPassword()
 		return 0, fmt.Errorf("process is nil after start")
 	}
 	pid := proc.Pid
@@ -368,8 +407,9 @@ func (s *serverService) StartForward(alias string, extraArgs []string) (int, err
 	s.fwMu.Unlock()
 
 	// Cleanup on exit
-	go func(a string, c *exec.Cmd, dn *os.File) {
+	go func(a string, c *exec.Cmd, dn *os.File, cleanup func()) {
 		_ = c.Wait()
+		cleanup()
 		_ = dn.Close()
 
 		s.fwMu.Lock()
@@ -392,7 +432,7 @@ func (s *serverService) StartForward(alias string, extraArgs []string) (int, err
 		} else {
 			s.forwards[a] = filtered
 		}
-	}(alias, cmd, devNull)
+	}(alias, cmd, devNull, cleanupPassword)
 
 	devNull = nil // Prevent defer from closing it
 
@@ -439,7 +479,7 @@ func (s *serverService) IsForwarding(alias string) bool {
 func (s *serverService) Ping(server domain.Server) (bool, time.Duration, error) {
 	start := time.Now()
 
-	host, port, ok := resolveSSHDestination(s.sshConfigPath, server.Alias)
+	host, port, ok := resolveSSHDestination(s.sshConfigPath, domain.SSHConnectionAlias(server.Alias))
 	if !ok {
 
 		host = strings.TrimSpace(server.Host)

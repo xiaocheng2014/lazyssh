@@ -15,10 +15,15 @@
 package ssh_config_file
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kevinburke/ssh_config"
 	"github.com/xiaocheng2014/lazyssh/internal/core/domain"
+	"go.uber.org/zap"
 )
 
 func TestCreateHostSeparatesLazySSHComment(t *testing.T) {
@@ -26,6 +31,117 @@ func TestCreateHostSeparatesLazySSHComment(t *testing.T) {
 	host := repository.createHostFromServer(domain.Server{Alias: "example", Host: "192.0.2.1"})
 	if firstLine := strings.SplitN(host.String(), "\n", 2)[0]; firstLine != "Host example    #Added by lazyssh" {
 		t.Fatalf("host line = %q", firstLine)
+	}
+}
+
+func TestChineseAliasUsesHiddenOpenSSHConnectionAlias(t *testing.T) {
+	repository := &Repository{}
+	host := repository.createHostFromServer(domain.Server{Alias: "生产数据库", Host: "192.0.2.1"})
+	connectionAlias := domain.SSHConnectionAlias("生产数据库")
+	if !strings.HasPrefix(host.String(), "Host 生产数据库 "+connectionAlias) {
+		t.Fatalf("host does not contain internal connection alias:\n%s", host.String())
+	}
+
+	config, err := ssh_config.Decode(strings.NewReader(host.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := repository.toDomainServer(config)
+	if len(servers) != 1 || len(servers[0].Aliases) != 1 || servers[0].Alias != "生产数据库" {
+		t.Fatalf("internal alias leaked into server list: %#v", servers)
+	}
+}
+
+func TestEnsureConnectionAliasesMigratesChineseConfigForOpenSSH(t *testing.T) {
+	sshPath, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("system ssh is unavailable")
+	}
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config")
+	metadataPath := filepath.Join(directory, "metadata.json")
+	if err := os.WriteFile(configPath, []byte("Host 生产数据库\n    HostName 192.0.2.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewRepository(zap.NewNop().Sugar(), configPath, metadataPath)
+	changed, err := repository.EnsureConnectionAliases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("Chinese config was not migrated")
+	}
+	connectionAlias := domain.SSHConnectionAlias("生产数据库")
+	command := exec.Command(sshPath, "-G", "-F", configPath, connectionAlias)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("OpenSSH rejected internal alias: %v\n%s", err, output)
+	}
+	if !strings.Contains(strings.ToLower(string(output)), "hostname 192.0.2.1") {
+		t.Fatalf("OpenSSH did not resolve configured HostName:\n%s", output)
+	}
+	changed, err = repository.EnsureConnectionAliases()
+	if err != nil || changed {
+		t.Fatalf("second migration changed config again: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestLoginPasswordRoundTripsThroughSSHConfigComment(t *testing.T) {
+	repository := &Repository{}
+	wantPassword := "server password # with symbols!"
+	host := repository.createHostFromServer(domain.Server{
+		Alias:         "生产数据库",
+		Host:          "192.0.2.1",
+		LoginPassword: wantPassword,
+	})
+	configText := host.String()
+	if !strings.Contains(configText, "PasswordAuthentication yes") {
+		t.Fatalf("password authentication was not enabled:\n%s", configText)
+	}
+	if !strings.Contains(configText, "# LazySSH-Password: "+wantPassword) {
+		t.Fatalf("saved password comment is missing:\n%s", configText)
+	}
+
+	config, err := ssh_config.Decode(strings.NewReader(configText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := repository.toDomainServer(config)
+	if len(servers) != 1 || servers[0].LoginPassword != wantPassword {
+		t.Fatalf("password round trip failed: %#v", servers)
+	}
+}
+
+func TestLoginPasswordCanBeReadFromStandaloneEditComment(t *testing.T) {
+	config, err := ssh_config.Decode(strings.NewReader("Host edited\n    HostName 192.0.2.1\n    # LazySSH-Password: edited password\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := (&Repository{}).toDomainServer(config)
+	if len(servers) != 1 || servers[0].LoginPassword != "edited password" {
+		t.Fatalf("standalone password comment was not loaded: %#v", servers)
+	}
+}
+
+func TestClearingLoginPasswordRemovesOnlyLazySSHComment(t *testing.T) {
+	repository := &Repository{}
+	host := repository.createHostFromServer(domain.Server{
+		Alias:         "example",
+		Host:          "192.0.2.1",
+		LoginPassword: "old-password",
+	})
+	for _, node := range host.Nodes {
+		if kv, ok := node.(*ssh_config.KV); ok && strings.EqualFold(kv.Key, "PasswordAuthentication") {
+			kv.Comment = "keep this | " + kv.Comment
+		}
+	}
+	repository.updateHostNodes(host, domain.Server{Alias: "example", Host: "192.0.2.1", PasswordAuthentication: "yes"})
+	configText := host.String()
+	if strings.Contains(configText, passwordCommentKey) {
+		t.Fatalf("password marker was not removed:\n%s", configText)
+	}
+	if !strings.Contains(configText, "#keep this") {
+		t.Fatalf("unrelated comment was removed:\n%s", configText)
 	}
 }
 

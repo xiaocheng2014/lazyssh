@@ -32,13 +32,35 @@ type Repository struct {
 }
 
 // NewRepository creates a new SSH config repository.
-func NewRepository(logger *zap.SugaredLogger, configPath, metaDataPath string) ports.ServerRepository {
+func NewRepository(logger *zap.SugaredLogger, configPath, metaDataPath string) *Repository {
 	return &Repository{
 		logger:          logger,
 		configPath:      configPath,
 		fileSystem:      DefaultFileSystem{},
 		metadataManager: newMetadataManager(metaDataPath, logger),
 	}
+}
+
+// EnsureConnectionAliases adds stable ASCII aliases for Host entries whose
+// display alias cannot be used as an OpenSSH command-line destination.
+func (r *Repository) EnsureConnectionAliases() (bool, error) {
+	cfg, err := r.loadConfig()
+	if err != nil {
+		return false, fmt.Errorf("failed to load config: %w", err)
+	}
+	changed := false
+	for _, host := range cfg.Hosts {
+		if ensureHostConnectionAlias(host) {
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := r.saveConfig(cfg); err != nil {
+		return false, fmt.Errorf("save internal SSH connection aliases: %w", err)
+	}
+	return true, nil
 }
 
 // NewRepositoryWithFS creates a new SSH config repository with a custom filesystem.
@@ -125,6 +147,7 @@ func (r *Repository) UpdateServer(server domain.Server, newServer domain.Server)
 	}
 
 	r.updateHostNodes(host, newServer)
+	ensureHostConnectionAlias(host)
 
 	if err := r.saveConfig(cfg); err != nil {
 		r.logger.Warnf("Failed to save config while updating server: %v", err)

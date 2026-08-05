@@ -2,11 +2,11 @@ package vault
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -130,7 +130,7 @@ func TestVaultAutomaticallyRemovesStaleLock(t *testing.T) {
 	}
 }
 
-func TestVaultRejectsLockOwnedByLiveProcess(t *testing.T) {
+func TestVaultWaitsForShortLivedWriteLock(t *testing.T) {
 	vaultDir := filepath.Join(t.TempDir(), "vault")
 	password := []byte("right password")
 	manager, err := Create(vaultDir, password, nil)
@@ -141,15 +141,88 @@ func TestVaultRejectsLockOwnedByLiveProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(vaultDir, lockName)
-	if err := os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+	if err := acquireLock(lockPath); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(lockPath)
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		releaseLock(lockPath)
+		close(released)
+	}()
 
-	if _, err := Unlock(vaultDir, password); err == nil {
-		t.Fatal("unlock succeeded while lock owner is alive")
-	} else if !strings.Contains(err.Error(), "already open by process") {
-		t.Fatalf("unexpected lock error: %v", err)
+	unlocked, err := Unlock(vaultDir, password)
+	if err != nil {
+		t.Fatalf("unlock did not wait for short write lock: %v", err)
+	}
+	<-released
+	if err := unlocked.CloseReadOnly(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVaultAllowsConcurrentUnlock(t *testing.T) {
+	vaultDir := filepath.Join(t.TempDir(), "vault")
+	password := []byte("concurrent window password")
+	first, err := Create(vaultDir, password, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Unlock(vaultDir, password)
+	if err != nil {
+		_ = first.CloseReadOnly()
+		t.Fatalf("second concurrent unlock failed: %v", err)
+	}
+	if first.WorkDir() == second.WorkDir() {
+		t.Fatal("concurrent managers unexpectedly share a plaintext runtime directory")
+	}
+	if err := first.CloseReadOnly(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CloseReadOnly(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVaultPreventsStaleWindowFromOverwritingNewerSave(t *testing.T) {
+	vaultDir := filepath.Join(t.TempDir(), "vault")
+	password := []byte("concurrent write password")
+	first, err := Create(vaultDir, password, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Unlock(vaultDir, password)
+	if err != nil {
+		_ = first.CloseReadOnly()
+		t.Fatal(err)
+	}
+	defer first.CloseReadOnly()
+	defer second.CloseReadOnly()
+
+	if err := os.WriteFile(first.Path(ConfigName), []byte("Host first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second.Path(ConfigName), []byte("Host stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Save(); !errors.Is(err, ErrVaultChanged) {
+		t.Fatalf("stale save error = %v, want ErrVaultChanged", err)
+	}
+
+	latest, err := Unlock(vaultDir, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer latest.CloseReadOnly()
+	config, err := os.ReadFile(latest.Path(ConfigName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(config) != "Host first\n" {
+		t.Fatalf("newer content was overwritten: %q", config)
 	}
 }
 
@@ -187,6 +260,26 @@ func TestVaultChangePassword(t *testing.T) {
 	}
 	if err := unlocked.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVaultVerifyPassword(t *testing.T) {
+	vaultDir := filepath.Join(t.TempDir(), "vault")
+	password := []byte("password to verify")
+	manager, err := Create(vaultDir, password, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := manager.CloseReadOnly(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := manager.VerifyPassword(password); err != nil {
+		t.Fatalf("correct password rejected: %v", err)
+	}
+	if err := manager.VerifyPassword([]byte("incorrect password")); err == nil {
+		t.Fatal("incorrect password accepted")
 	}
 }
 

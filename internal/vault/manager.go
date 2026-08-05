@@ -2,6 +2,7 @@ package vault
 
 import (
 	"archive/tar"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,10 @@ const (
 
 var scryptWorkFactor = 18
 
+const lockWaitTimeout = 3 * time.Second
+
+var ErrVaultChanged = errors.New("加密仓库已被另一个 LazySSH 窗口更新，请重新打开当前窗口后再修改")
+
 type Manifest struct {
 	Version   int       `json:"version"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -46,6 +51,8 @@ type Manager struct {
 	password  []byte
 	closed    bool
 	lockPath  string
+	revision  [sha256.Size]byte
+	hasBundle bool
 }
 
 func BundlePath(vaultDir string) string {
@@ -135,6 +142,16 @@ func Unlock(vaultDir string, password []byte) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := acquireLockWithRetry(manager.lockPath); err != nil {
+		manager.cleanupRuntime()
+		return nil, err
+	}
+	defer releaseLock(manager.lockPath)
+	revision, err := hashBundle(manager.vaultPath)
+	if err != nil {
+		manager.cleanupRuntime()
+		return nil, fmt.Errorf("read encrypted vault revision: %w", err)
+	}
 	if err := extractBundle(manager.vaultPath, manager.workDir, password); err != nil {
 		manager.cleanupRuntime()
 		return nil, fmt.Errorf("unlock vault: %w", err)
@@ -143,22 +160,19 @@ func Unlock(vaultDir string, password []byte) (*Manager, error) {
 		manager.cleanupRuntime()
 		return nil, fmt.Errorf("create vault key directory: %w", err)
 	}
+	manager.revision = revision
+	manager.hasBundle = true
 	return manager, nil
 }
 
 func newManager(vaultDir string, password []byte) (*Manager, error) {
 	lockPath := filepath.Join(vaultDir, lockName)
-	if err := acquireLock(lockPath); err != nil {
-		return nil, err
-	}
 	workDir, err := os.MkdirTemp("", "lazyssh-runtime-")
 	if err != nil {
-		_ = os.Remove(lockPath)
 		return nil, fmt.Errorf("create vault runtime directory: %w", err)
 	}
 	if err := os.Chmod(workDir, 0o700); err != nil {
 		_ = os.RemoveAll(workDir)
-		_ = os.Remove(lockPath)
 		return nil, fmt.Errorf("secure vault runtime directory: %w", err)
 	}
 	return &Manager{
@@ -168,6 +182,24 @@ func newManager(vaultDir string, password []byte) (*Manager, error) {
 		password:  append([]byte(nil), password...),
 		lockPath:  lockPath,
 	}, nil
+}
+
+func acquireLockWithRetry(lockPath string) error {
+	deadline := time.Now().Add(lockWaitTimeout)
+	for {
+		err := acquireLock(lockPath)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, os.ErrExist) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func releaseLock(lockPath string) {
+	_ = os.Remove(lockPath)
 }
 
 func acquireLock(lockPath string) error {
@@ -194,7 +226,7 @@ func acquireLock(lockPath string) error {
 			return inspectErr
 		}
 		if !stale {
-			return fmt.Errorf("vault is already open by process %d (lock: %s)", lockPID, lockPath)
+			return fmt.Errorf("another LazySSH process is saving the vault (process %d, lock: %s): %w", lockPID, lockPath, os.ErrExist)
 		}
 		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove stale vault lock %s: %w", lockPath, err)
@@ -325,7 +357,43 @@ func (m *Manager) ChangePassword(newPassword []byte) error {
 	return nil
 }
 
+// VerifyPassword checks a candidate against the encrypted bundle without
+// changing the active password or any vault content.
+func (m *Manager) VerifyPassword(password []byte) error {
+	if len(password) == 0 {
+		return errors.New("vault password must not be empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("vault is closed")
+	}
+	if err := verifyBundle(m.vaultPath, password); err != nil {
+		return fmt.Errorf("密码不正确或加密仓库已损坏：%w", err)
+	}
+	return nil
+}
+
 func (m *Manager) saveLocked() error {
+	if err := acquireLockWithRetry(m.lockPath); err != nil {
+		return err
+	}
+	defer releaseLock(m.lockPath)
+
+	currentExists := Exists(m.vaultDir)
+	if m.hasBundle != currentExists {
+		return ErrVaultChanged
+	}
+	if currentExists {
+		currentRevision, err := hashBundle(m.vaultPath)
+		if err != nil {
+			return fmt.Errorf("read current encrypted vault revision: %w", err)
+		}
+		if currentRevision != m.revision {
+			return ErrVaultChanged
+		}
+	}
+
 	manifest := Manifest{Version: 1, UpdatedAt: time.Now().UTC()}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -376,9 +444,15 @@ func (m *Manager) saveLocked() error {
 	if err := verifyBundle(tempPath, m.password); err != nil {
 		return fmt.Errorf("verify encrypted vault: %w", err)
 	}
+	newRevision, err := hashBundle(tempPath)
+	if err != nil {
+		return fmt.Errorf("hash encrypted vault: %w", err)
+	}
 	if err := replaceBundle(tempPath, m.vaultPath); err != nil {
 		return err
 	}
+	m.revision = newRevision
+	m.hasBundle = true
 	return nil
 }
 
@@ -427,15 +501,22 @@ func (m *Manager) removeWorkDir() error {
 }
 
 func (m *Manager) cleanupRuntime() error {
-	workErr := m.removeWorkDir()
-	lockErr := os.Remove(m.lockPath)
-	if os.IsNotExist(lockErr) {
-		lockErr = nil
+	return m.removeWorkDir()
+}
+
+func hashBundle(path string) ([sha256.Size]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return [sha256.Size]byte{}, err
 	}
-	if lockErr != nil {
-		lockErr = fmt.Errorf("remove vault lock: %w", lockErr)
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return [sha256.Size]byte{}, err
 	}
-	return errors.Join(workErr, lockErr)
+	var revision [sha256.Size]byte
+	copy(revision[:], hash.Sum(nil))
+	return revision, nil
 }
 
 func copyOptionalFile(source, destination string) error {

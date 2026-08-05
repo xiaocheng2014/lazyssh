@@ -136,8 +136,8 @@ func GetFieldValidators() map[string]fieldValidator {
 	// Basic fields
 	validators["Alias"] = fieldValidator{
 		Required: true,
-		Pattern:  regexp.MustCompile(`^[a-zA-Z0-9._-]+$`),
-		Message:  "Alias is required and can only contain letters, numbers, dots, hyphens, and underscores",
+		Pattern:  regexp.MustCompile(`^[\p{L}\p{M}\p{N}._-]+$`),
+		Message:  "Alias 不能为空，只能包含中文等文字、数字、点、连字符和下划线",
 	}
 	validators["Host"] = fieldValidator{
 		Required: true,
