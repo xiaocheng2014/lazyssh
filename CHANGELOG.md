@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/xiaocheng2014/lazyssh/compare/v1.0.0...v1.0.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **release:** 修正自动发布标签格式 ([1f69350](https://github.com/xiaocheng2014/lazyssh/commit/1f69350115da06ec50fc3675948adbb0b04287eb))
+
 ## 1.0.0 (2026-08-05)
 
 
