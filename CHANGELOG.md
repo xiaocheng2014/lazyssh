@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/xiaocheng2014/lazyssh/compare/v1.1.0...v1.1.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **vault:** 修复 iSH 密码加密卡顿 ([bb883e1](https://github.com/xiaocheng2014/lazyssh/commit/bb883e1491782a071ea4bb7d5e94cb28c0034909))
+
 ## [1.1.0](https://github.com/xiaocheng2014/lazyssh/compare/v1.0.1...v1.1.0) (2026-08-14)
 
 
