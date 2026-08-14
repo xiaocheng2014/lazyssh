@@ -43,24 +43,34 @@ func (t *tui) showChangeVaultPasswordForm() {
 	form.AddButton("修改", func() {
 		password := []byte(newPassword.GetText())
 		confirm := []byte(confirmation.GetText())
-		defer clearPasswordBytes(password)
-		defer clearPasswordBytes(confirm)
 		newPassword.SetText("")
 		confirmation.SetText("")
 		if len(password) < 10 || strings.TrimSpace(string(password)) == "" {
+			clearPasswordBytes(password)
+			clearPasswordBytes(confirm)
 			t.showVaultError(fmt.Errorf("密码至少需要 10 个字符"))
 			return
 		}
 		if !bytes.Equal(password, confirm) {
+			clearPasswordBytes(password)
+			clearPasswordBytes(confirm)
 			t.showVaultError(fmt.Errorf("两次输入的密码不一致"))
 			return
 		}
-		if err := t.vaultService.ChangePassword(password); err != nil {
-			t.showVaultError(err)
-			return
-		}
-		t.returnToMain()
-		t.showStatusTemp("加密密码和本地密码文件已更新")
+		clearPasswordBytes(confirm)
+		t.showVaultProgress("正在使用新密码重新加密配置仓库，请稍候...")
+		go func() {
+			defer clearPasswordBytes(password)
+			err := t.vaultService.ChangePassword(password)
+			t.app.QueueUpdateDraw(func() {
+				if err != nil {
+					t.showVaultError(err)
+					return
+				}
+				t.returnToMain()
+				t.showStatusTemp("加密密码和本地密码文件已更新")
+			})
+		}()
 	})
 	form.AddButton("取消", t.showVaultManager)
 	form.SetCancelFunc(t.showVaultManager)
@@ -83,14 +93,20 @@ func (t *tui) showTestVaultPasswordForm() {
 	form.AddTextView("", "仅尝试解密仓库以验证密码，不会修改任何数据。", 0, 2, true, false)
 	form.AddButton("测试", func() {
 		password := []byte(passwordField.GetText())
-		defer clearPasswordBytes(password)
 		passwordField.SetText("")
-		if err := t.vaultService.VerifyPassword(password); err != nil {
-			t.showVaultError(err)
-			return
-		}
-		t.returnToMain()
-		t.showStatusTemp("密码正确，可以正常解密配置仓库")
+		t.showVaultProgress("正在测试密码，请稍候...")
+		go func() {
+			defer clearPasswordBytes(password)
+			err := t.vaultService.VerifyPassword(password)
+			t.app.QueueUpdateDraw(func() {
+				if err != nil {
+					t.showVaultError(err)
+					return
+				}
+				t.returnToMain()
+				t.showStatusTemp("密码正确，可以正常解密配置仓库")
+			})
+		}()
 	})
 	form.AddButton("取消", t.showVaultManager)
 	form.SetCancelFunc(t.showVaultManager)
@@ -103,6 +119,11 @@ func (t *tui) showTestVaultPasswordForm() {
 	})
 	t.app.SetRoot(form, true)
 	t.app.SetFocus(form)
+}
+
+func (t *tui) showVaultProgress(message string) {
+	modal := tview.NewModal().SetText(message)
+	t.app.SetRoot(modal, true)
 }
 
 func (t *tui) showVaultError(err error) {

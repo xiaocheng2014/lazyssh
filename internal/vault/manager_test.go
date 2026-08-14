@@ -2,6 +2,7 @@ package vault
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,24 @@ func TestMain(m *testing.M) {
 	// exercising the same age/scrypt archive format and password flow.
 	scryptWorkFactor = 10
 	os.Exit(m.Run())
+}
+
+func TestRecommendedScryptWorkFactor(t *testing.T) {
+	if got := recommendedScryptWorkFactor("linux", "386"); got != ishScryptWorkFactor {
+		t.Fatalf("linux/386 work factor = %d, want %d", got, ishScryptWorkFactor)
+	}
+	for _, platform := range []struct {
+		goos   string
+		goarch string
+	}{
+		{goos: "linux", goarch: "amd64"},
+		{goos: "darwin", goarch: "arm64"},
+		{goos: "windows", goarch: "386"},
+	} {
+		if got := recommendedScryptWorkFactor(platform.goos, platform.goarch); got != desktopScryptWorkFactor {
+			t.Fatalf("%s/%s work factor = %d, want %d", platform.goos, platform.goarch, got, desktopScryptWorkFactor)
+		}
+	}
 }
 
 func TestVaultCreateSaveUnlock(t *testing.T) {
@@ -58,6 +77,51 @@ func TestVaultCreateSaveUnlock(t *testing.T) {
 	}
 	if string(metadata) != `{"test":{"tags":["dev"]}}` {
 		t.Fatalf("unexpected metadata: %q", metadata)
+	}
+}
+
+func TestVaultPreservesScryptWorkFactorFromManifest(t *testing.T) {
+	const preservedWorkFactor = 11
+	vaultDir := filepath.Join(t.TempDir(), "vault")
+	password := []byte("portable vault password")
+	manager, err := Create(vaultDir, password, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manifestData, err := os.ReadFile(manager.Path(ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ScryptWorkFactor != scryptWorkFactor {
+		t.Fatalf("created manifest work factor = %d, want %d", manifest.ScryptWorkFactor, scryptWorkFactor)
+	}
+	manifest.ScryptWorkFactor = preservedWorkFactor
+	manifestData, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.Path(ManifestName), manifestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.scryptWorkFactor = preservedWorkFactor
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	unlocked, err := Unlock(vaultDir, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlocked.scryptWorkFactor != preservedWorkFactor {
+		t.Fatalf("unlocked work factor = %d, want %d", unlocked.scryptWorkFactor, preservedWorkFactor)
+	}
+	if err := unlocked.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

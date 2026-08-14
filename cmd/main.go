@@ -276,6 +276,11 @@ func openVault(home string) (*vault.Manager, error) {
 			return nil, promptErr
 		}
 		defer clearBytes(password)
+		if runtime.GOOS == "linux" && runtime.GOARCH == "386" {
+			fmt.Fprintln(os.Stderr, "正在创建并加密配置仓库，请稍候（iSH 上可能需要数秒）...")
+		} else {
+			fmt.Fprintln(os.Stderr, "正在创建并加密配置仓库，请稍候...")
+		}
 		initialFiles := map[string]string{}
 		if !fileExists(filepath.Join(vaultDir, vault.ConfigName)) {
 			initialFiles[vault.ConfigName] = filepath.Join(home, ".ssh", "config")
@@ -451,6 +456,9 @@ func runPasswordChange(home string, output io.Writer) error {
 	password, operationErr := readConfirmedPassword("请输入新密码（至少 10 个字符）：", "请再次输入新密码：")
 	if operationErr == nil {
 		defer clearBytes(password)
+		_, operationErr = fmt.Fprintln(output, "正在使用新密码重新加密配置仓库，请稍候...")
+	}
+	if operationErr == nil {
 		operationErr = manager.ChangePassword(password)
 		if operationErr == nil {
 			_, operationErr = fmt.Fprintln(output, "加密密码和本地密码文件已更新。")

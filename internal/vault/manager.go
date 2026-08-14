@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,15 +31,23 @@ const (
 	lockName          = ".lazyssh.lock"
 )
 
-var scryptWorkFactor = 18
+const (
+	desktopScryptWorkFactor = 18
+	ishScryptWorkFactor     = 15
+	minScryptWorkFactor     = 10
+	maxScryptWorkFactor     = 22
+)
+
+var scryptWorkFactor = recommendedScryptWorkFactor(runtime.GOOS, runtime.GOARCH)
 
 const lockWaitTimeout = 3 * time.Second
 
 var ErrVaultChanged = errors.New("加密仓库已被另一个 LazySSH 窗口更新，请重新打开当前窗口后再修改")
 
 type Manifest struct {
-	Version   int       `json:"version"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Version          int       `json:"version"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	ScryptWorkFactor int       `json:"scrypt_work_factor,omitempty"`
 }
 
 // Manager owns an unlocked, temporary working directory and persists it as a
@@ -53,6 +62,9 @@ type Manager struct {
 	lockPath  string
 	revision  [sha256.Size]byte
 	hasBundle bool
+	// scryptWorkFactor is stored in the encrypted manifest so a vault created
+	// for iSH remains usable there after another platform re-encrypts it.
+	scryptWorkFactor int
 }
 
 func BundlePath(vaultDir string) string {
@@ -160,6 +172,7 @@ func Unlock(vaultDir string, password []byte) (*Manager, error) {
 		manager.cleanupRuntime()
 		return nil, fmt.Errorf("create vault key directory: %w", err)
 	}
+	manager.loadScryptWorkFactor()
 	manager.revision = revision
 	manager.hasBundle = true
 	return manager, nil
@@ -176,12 +189,36 @@ func newManager(vaultDir string, password []byte) (*Manager, error) {
 		return nil, fmt.Errorf("secure vault runtime directory: %w", err)
 	}
 	return &Manager{
-		vaultDir:  vaultDir,
-		vaultPath: BundlePath(vaultDir),
-		workDir:   workDir,
-		password:  append([]byte(nil), password...),
-		lockPath:  lockPath,
+		vaultDir:         vaultDir,
+		vaultPath:        BundlePath(vaultDir),
+		workDir:          workDir,
+		password:         append([]byte(nil), password...),
+		lockPath:         lockPath,
+		scryptWorkFactor: scryptWorkFactor,
 	}, nil
+}
+
+func recommendedScryptWorkFactor(goos, goarch string) int {
+	// The released linux/386 build targets iSH, whose interpreted x86 runtime
+	// makes age's desktop default appear to hang and can exhaust its memory.
+	if goos == "linux" && goarch == "386" {
+		return ishScryptWorkFactor
+	}
+	return desktopScryptWorkFactor
+}
+
+func (m *Manager) loadScryptWorkFactor() {
+	data, err := os.ReadFile(m.Path(ManifestName))
+	if err != nil {
+		return
+	}
+	var manifest Manifest
+	if json.Unmarshal(data, &manifest) != nil {
+		return
+	}
+	if manifest.ScryptWorkFactor >= minScryptWorkFactor && manifest.ScryptWorkFactor <= maxScryptWorkFactor {
+		m.scryptWorkFactor = manifest.ScryptWorkFactor
+	}
 }
 
 func acquireLockWithRetry(lockPath string) error {
@@ -394,7 +431,11 @@ func (m *Manager) saveLocked() error {
 		}
 	}
 
-	manifest := Manifest{Version: 1, UpdatedAt: time.Now().UTC()}
+	manifest := Manifest{
+		Version:          1,
+		UpdatedAt:        time.Now().UTC(),
+		ScryptWorkFactor: m.scryptWorkFactor,
+	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode vault manifest: %w", err)
@@ -419,7 +460,7 @@ func (m *Manager) saveLocked() error {
 		_ = tempFile.Close()
 		return fmt.Errorf("initialize vault encryption: %w", err)
 	}
-	recipient.SetWorkFactor(scryptWorkFactor)
+	recipient.SetWorkFactor(m.scryptWorkFactor)
 	encryptedWriter, err := age.Encrypt(tempFile, recipient)
 	if err != nil {
 		_ = tempFile.Close()
