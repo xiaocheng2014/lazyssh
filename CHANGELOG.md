@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/xiaocheng2014/lazyssh/compare/v1.0.1...v1.1.0) (2026-08-14)
+
+
+### Features
+
+* **release:** 增加 iSH 运行支持 ([61a3a99](https://github.com/xiaocheng2014/lazyssh/commit/61a3a990c741716d1d52bab087558803afc6fd7c))
+
 ## [1.0.1](https://github.com/xiaocheng2014/lazyssh/compare/v1.0.0...v1.0.1) (2026-08-07)
 
 
