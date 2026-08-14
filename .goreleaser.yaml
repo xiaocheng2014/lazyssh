@@ -12,6 +12,7 @@ builds:
     binary: lazyssh
     env:
       - CGO_ENABLED=0
+      - GO386=softfloat
     goos:
       - linux
       - darwin
@@ -19,6 +20,12 @@ builds:
     goarch:
       - amd64
       - arm64
+      - "386"
+    ignore:
+      - goos: darwin
+        goarch: "386"
+      - goos: windows
+        goarch: "386"
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
@@ -35,6 +42,7 @@ archives:
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: windows

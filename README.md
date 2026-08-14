@@ -265,13 +265,13 @@ SSH into the selected server
 
 1. 推送符合 Conventional Commits 规范的提交后，GitHub Actions 会自动创建或更新 Release PR。
 2. 合并 Release PR 后，Actions 会自动创建语义化版本标签和 GitHub Release。
-3. Release 会包含 Linux、macOS、Windows 的 amd64/arm64 压缩包以及 `checksums.txt`。
+3. Release 会包含 Linux、macOS、Windows 的 amd64/arm64 压缩包、供 iSH 使用的 Linux i386 压缩包，以及 `checksums.txt`。
 
 版本规则为：`fix:` 发布补丁版本，`feat:` 发布次版本，带 `!` 的破坏性变更发布主版本。整个流程使用仓库自带的 `GITHUB_TOKEN`，无需额外配置个人令牌。
 
 ### Option 1: Download Binary from Releases
 
-Download from [GitHub Releases](https://github.com/xiaocheng2014/lazyssh/releases). You can use the snippet below to automatically fetch the latest version for your OS/ARCH (Darwin/Linux and amd64/arm64 supported):
+Download from [GitHub Releases](https://github.com/xiaocheng2014/lazyssh/releases). You can use the snippet below to automatically fetch the latest version for your OS/ARCH (Darwin/Linux amd64/arm64 and Linux i386 supported):
 
 ```bash
 # Detect the platform name used by release archives
@@ -279,6 +279,7 @@ OS=$(uname -s)
 case "$(uname -m)" in
   x86_64|amd64) ARCH=x86_64 ;;
   arm64|aarch64) ARCH=arm64 ;;
+  i386|i486|i586|i686|x86) ARCH=i386 ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -293,7 +294,26 @@ sudo mv lazyssh /usr/local/bin/
 lazyssh
 ```
 
-### Option 2: Build from Source
+### Option 2: Install in iSH on iOS/iPadOS
+
+[iSH](https://ish.app/) runs a 32-bit x86 Alpine Linux environment, so it must use the `lazyssh_Linux_i386.tar.gz` release package. In iSH, run:
+
+```sh
+apk update
+apk add openssh-client ca-certificates
+
+wget -O /tmp/lazyssh.tar.gz \
+  https://github.com/xiaocheng2014/lazyssh/releases/latest/download/lazyssh_Linux_i386.tar.gz
+tar -xzf /tmp/lazyssh.tar.gz -C /tmp
+mv /tmp/lazyssh /usr/local/bin/lazyssh
+chmod 755 /usr/local/bin/lazyssh
+
+lazyssh
+```
+
+LazySSH stores its encrypted vault in `/root/.config/lazyssh` in the default iSH filesystem and uses iSH's `ssh` command for connections. To manage the encrypted vault with Git inside iSH, also install Git with `apk add git`. iOS may suspend iSH when it enters the background or the device locks, so keep iSH active during an SSH session.
+
+### Option 3: Build from Source
 
 ```bash
 # Clone the repository
