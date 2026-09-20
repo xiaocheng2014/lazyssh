@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/xiaocheng2014/lazyssh/compare/v1.1.1...v1.2.0) (2026-09-20)
+
+
+### Features
+
+* 支持文件上传下载并兼容 iSH 连接 ([5cf416d](https://github.com/xiaocheng2014/lazyssh/commit/5cf416d5ae16f093704ad3be5c247c6e6d05f673))
+
+
+### Bug Fixes
+
+* 支持传输目录目标并补全本地路径 ([f4f064b](https://github.com/xiaocheng2014/lazyssh/commit/f4f064bb141a21f27e8bd0585d1f83c9c6c5ad33))
+
 ## [1.1.1](https://github.com/xiaocheng2014/lazyssh/compare/v1.1.0...v1.1.1) (2026-08-14)
 
 
