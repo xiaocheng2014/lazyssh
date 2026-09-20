@@ -124,18 +124,20 @@ lazyssh go 2
 
 ### 上传与下载文件
 
-使用 `lazyssh list` 中的序号指定服务器。远端路径必须是绝对路径，并明确写出目标文件或目录名称：
+使用 `lazyssh list` 中的序号指定服务器。远端路径必须是绝对路径；上传时既可以写完整目标文件路径，也可以直接写已存在的远端目录（此时沿用本地文件名）：
 
 ```bash
 lazyssh upload 2 ./app.tar.gz /tmp/app.tar.gz
+lazyssh upload 2 ./app.tar.gz /tmp/
 lazyssh download 2 /var/log/app.log ./app.log
+lazyssh download 2 /var/log/app.log ./downloads/
 lazyssh upload 2 ./website /srv/website --recursive
 lazyssh download 2 /var/log/myapp ./myapp-logs --recursive
 ```
 
-默认拒绝覆盖已存在的目标文件；确认要替换时加 `--overwrite`。为避免目录嵌套或意外合并，已存在的目标目录始终被拒绝。缺少 SFTP 服务的远端主机可加 `--legacy` 使用旧版 SCP 协议。iSH 的旧版 SCP 客户端会自动使用兼容路径；在 iSH 上无需额外加 `--legacy`。
+默认拒绝覆盖已存在的目标文件；确认要替换时加 `--overwrite`。上传可指定现有远端目录，下载可指定现有本地目录；LazySSH 会先检查目录下将生成的同名目标。仍不允许合并已有目标目录。缺少 SFTP 服务的远端主机可加 `--legacy` 使用旧版 SCP 协议。iSH 的旧版 SCP 客户端会自动使用兼容路径；在 iSH 上无需额外加 `--legacy`。
 
-TUI 中选中服务器后按 `u` 上传、按 `D` 下载，填写本地和远端路径，并按需选择“递归目录”“覆盖已有文件”“旧版 SCP”。传输只读写用户明确指定的路径，不会自动上传 LazySSH 的保险库、密码文件或解密临时目录。目录递归传输会遵循 `scp -r` 的符号链接行为，请先确认目录内容。
+TUI 中选中服务器后按 `u` 上传、按 `D` 下载，填写本地和远端路径，并按需选择“递归目录”“覆盖已有文件”“旧版 SCP”。本地路径输入框支持文件系统自动补全：输入路径前缀后按 Tab 或 Enter 选中候选目录/文件，按 ↓ 可重新打开候选列表；支持 `~/`、空格和中文路径。传输只读写用户明确指定的路径，不会自动上传 LazySSH 的保险库、密码文件或解密临时目录。目录递归传输会遵循 `scp -r` 的符号链接行为，请先确认目录内容。
 
 ### 直接编辑配置与密码管理
 
