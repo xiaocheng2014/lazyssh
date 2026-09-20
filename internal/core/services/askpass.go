@@ -9,24 +9,32 @@ import (
 	"strings"
 )
 
-const askpassPasswordFileEnv = "LAZYSSH_ASKPASS_PASSWORD_FILE"
+const (
+	askpassPasswordFileEnv = "LAZYSSH_ASKPASS_PASSWORD_FILE"
+	askpassPasswordEnv     = "LAZYSSH_ISH_ASKPASS_PASSWORD"
+)
 
 // HandleSSHAskpass handles an invocation of the LazySSH executable by
-// OpenSSH's SSH_ASKPASS mechanism. The password itself is passed through an
-// owner-only temporary file, never through command-line arguments or an
-// environment variable.
+// OpenSSH's SSH_ASKPASS mechanism. Normally the password is passed through an
+// owner-only temporary file. iSH uses a process-local environment value in
+// its separate process-launch compatibility path.
 func HandleSSHAskpass(args []string, output io.Writer) (bool, error) {
 	passwordPath := os.Getenv(askpassPasswordFileEnv)
-	if passwordPath == "" {
+	environmentPassword := os.Getenv(askpassPasswordEnv)
+	if passwordPath == "" && environmentPassword == "" {
 		return false, nil
 	}
 	prompt := strings.ToLower(strings.Join(args, " "))
 	if !strings.Contains(prompt, "password") && !strings.Contains(prompt, "密码") {
 		return true, errors.New("refusing to provide a saved server password for a non-password SSH prompt")
 	}
-	password, err := os.ReadFile(passwordPath)
-	if err != nil {
-		return true, fmt.Errorf("read temporary SSH password: %w", err)
+	password := []byte(environmentPassword)
+	if passwordPath != "" {
+		var err error
+		password, err = os.ReadFile(passwordPath)
+		if err != nil {
+			return true, fmt.Errorf("read temporary SSH password: %w", err)
+		}
 	}
 	defer clearSecret(password)
 	if len(password) == 0 {
@@ -35,18 +43,39 @@ func HandleSSHAskpass(args []string, output io.Writer) (bool, error) {
 	if _, err := output.Write(password); err != nil {
 		return true, fmt.Errorf("write SSH password response: %w", err)
 	}
-	_, err = io.WriteString(output, "\n")
+	_, err := io.WriteString(output, "\n")
 	return true, err
 }
 
 func newSSHCommand(args []string, loginPassword string) (*exec.Cmd, func(), error) {
-	// #nosec G204 -- arguments are explicit SSH options and a selected local alias.
-	command := exec.Command("ssh", args...)
+	return newAuthenticatedCommand("ssh", args, loginPassword)
+}
+
+func newAuthenticatedCommand(program string, args []string, loginPassword string) (*exec.Cmd, func(), error) {
+	// #nosec G204 -- program is a fixed OpenSSH tool; arguments are built by LazySSH.
+	command := exec.Command(program, args...)
 	if loginPassword == "" {
 		return command, func() {}, nil
 	}
 	if strings.ContainsAny(loginPassword, "\x00\r\n") {
 		return nil, nil, errors.New("saved server password must not contain NUL or newline characters")
+	}
+	if runningOnISH() {
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve LazySSH executable for SSH_ASKPASS: %w", err)
+		}
+		display := os.Getenv("DISPLAY")
+		if display == "" {
+			display = "lazyssh:0"
+		}
+		command.Env = replaceEnvironment(os.Environ(), map[string]string{
+			"SSH_ASKPASS":         executable,
+			"SSH_ASKPASS_REQUIRE": "force",
+			"DISPLAY":             display,
+			askpassPasswordEnv:    loginPassword,
+		})
+		return command, func() {}, nil
 	}
 
 	passwordFile, err := os.CreateTemp("", "lazyssh-askpass-*.password")

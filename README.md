@@ -26,6 +26,11 @@ With lazyssh, you can quickly navigate, connect, manage SSH keys, and work with 
 - 🏷 Tag servers (e.g., prod, dev, test) for quick filtering.
 - ↕️ Sort by alias or last SSH (toggle + reverse).
 
+### File Transfer
+- 📤 Upload and 📥 download a selected file or directory using the system OpenSSH `scp` client.
+- 🔐 Reuse each server's SSH configuration, managed key, proxy settings, and saved login password.
+- 🛑 Refuse to overwrite an existing file unless explicitly requested.
+
 ### Advanced SSH Configuration
 - 🔗 Port forwarding (LocalForward, RemoteForward, DynamicForward).
 - 🚀 Connection multiplexing for faster subsequent connections.
@@ -51,7 +56,6 @@ With lazyssh, you can quickly navigate, connect, manage SSH keys, and work with 
 
 
 ### Upcoming
-- 📁 Copy files between local and servers with an easy picker UI.
 - 🔑 SSH Key Deployment Features:
     - Use default local public key (`~/.ssh/id_ed25519.pub` or `~/.ssh/id_rsa.pub`)
     - Paste custom public keys manually
@@ -118,6 +122,21 @@ lazyssh go 2
 
 `list` 和 `go` 使用完全相同的稳定排序。`go` 继续使用专用 SSH 配置、服务器绑定的托管私钥以及连接元数据记录；`list` 是只读操作，不会无故改写加密包。
 
+### 上传与下载文件
+
+使用 `lazyssh list` 中的序号指定服务器。远端路径必须是绝对路径，并明确写出目标文件或目录名称：
+
+```bash
+lazyssh upload 2 ./app.tar.gz /tmp/app.tar.gz
+lazyssh download 2 /var/log/app.log ./app.log
+lazyssh upload 2 ./website /srv/website --recursive
+lazyssh download 2 /var/log/myapp ./myapp-logs --recursive
+```
+
+默认拒绝覆盖已存在的目标文件；确认要替换时加 `--overwrite`。为避免目录嵌套或意外合并，已存在的目标目录始终被拒绝。缺少 SFTP 服务的远端主机可加 `--legacy` 使用旧版 SCP 协议。iSH 的旧版 SCP 客户端会自动使用兼容路径；在 iSH 上无需额外加 `--legacy`。
+
+TUI 中选中服务器后按 `u` 上传、按 `D` 下载，填写本地和远端路径，并按需选择“递归目录”“覆盖已有文件”“旧版 SCP”。传输只读写用户明确指定的路径，不会自动上传 LazySSH 的保险库、密码文件或解密临时目录。目录递归传输会遵循 `scp -r` 的符号链接行为，请先确认目录内容。
+
 ### 直接编辑配置与密码管理
 
 直接编辑保险库中的服务器配置：
@@ -156,7 +175,7 @@ Host 生产数据库
 
 `LazySSH-Password` 是 LazySSH 专用注释，OpenSSH 会忽略它。编辑期间配置位于权限受限的临时目录中，因此密码是可读的明文；退出编辑器后，配置、元数据、托管密钥和服务器密码会一起重新加密到 `lazyssh.bundle.age`，Git 中只保存加密包。
 
-连接时 LazySSH 通过 `SSH_ASKPASS` 将密码交给系统 OpenSSH。密码不会写入命令行参数、环境变量值或日志；使用完毕后，权限为 `0600` 的临时密码文件会立即清除。清空 `LoginPassword` 或删除 `LazySSH-Password` 注释即可恢复为 SSH 自己的交互式密码提示。
+连接与文件传输时 LazySSH 通过 `SSH_ASKPASS` 将密码交给系统 OpenSSH。密码不会写入命令行参数或日志。通常使用权限为 `0600` 的临时密码文件，传输完成后立即清除；iSH 兼容路径会把密码放在所启动的 SSH/SCP 进程环境中，进程结束后即消失。清空 `LoginPassword` 或删除 `LazySSH-Password` 注释即可恢复为 SSH 自己的交互式密码提示。
 
 ### 远程抓包
 
@@ -337,6 +356,8 @@ make run
 | /     | Toggle search bar             |
 | ↑↓/jk | Navigate servers              |
 | Enter | SSH into selected server      |
+| u     | Upload file or directory      |
+| D     | Download file or directory    |
 | K     | Manage/import/restore keys    |
 | V     | Test/change vault password    |
 | c     | Copy SSH command to clipboard |

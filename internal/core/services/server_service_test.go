@@ -183,6 +183,20 @@ func TestAskpassRejectsNonPasswordPrompt(t *testing.T) {
 	}
 }
 
+func TestAskpassReadsISHEnvironmentPassword(t *testing.T) {
+	const password = "iSH environment password"
+	t.Setenv(askpassPasswordFileEnv, "")
+	t.Setenv(askpassPasswordEnv, password)
+	var output bytes.Buffer
+	handled, err := HandleSSHAskpass([]string{"user@example's password:"}, &output)
+	if err != nil || !handled {
+		t.Fatalf("HandleSSHAskpass() handled=%v err=%v", handled, err)
+	}
+	if output.String() != password+"\n" {
+		t.Fatalf("askpass output = %q", output.String())
+	}
+}
+
 func environmentValue(environment []string, key string) string {
 	prefix := key + "="
 	for _, item := range environment {

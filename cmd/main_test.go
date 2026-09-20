@@ -64,7 +64,7 @@ func TestServerAtIndex(t *testing.T) {
 
 func TestRootCommandIncludesNonInteractiveCommands(t *testing.T) {
 	root := newRootCommand(nil)
-	for _, name := range []string{"list", "go", "edit", "password"} {
+	for _, name := range []string{"list", "go", "upload", "download", "edit", "password"} {
 		command, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatal(err)
@@ -80,6 +80,23 @@ func TestRootCommandIncludesNonInteractiveCommands(t *testing.T) {
 		}
 		if command.Name() != name {
 			t.Fatalf("password command %q resolved to %q", name, command.Name())
+		}
+	}
+}
+
+func TestTransferCommandHelpShowsSafetyFlags(t *testing.T) {
+	for _, name := range []string{"upload", "download"} {
+		root := newRootCommand(nil)
+		var output bytes.Buffer
+		root.SetOut(&output)
+		root.SetArgs([]string{name, "--help"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("%s --help: %v", name, err)
+		}
+		for _, flag := range []string{"--recursive", "--overwrite", "--legacy"} {
+			if !strings.Contains(output.String(), flag) {
+				t.Errorf("%s help is missing %s", name, flag)
+			}
 		}
 	}
 }

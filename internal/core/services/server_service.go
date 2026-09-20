@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +87,9 @@ func (s *serverService) connectionSpec(alias string, extraArgs ...string) ([]str
 	}
 	if loginPassword != "" {
 		args = append(args, "-o", "BatchMode=no", "-o", "PasswordAuthentication=yes")
+		if runningOnISH() {
+			args = append(args, "-o", "NumberOfPasswordPrompts=1")
+		}
 	}
 	args = append(args, extraArgs...)
 	args = append(args, domain.SSHConnectionAlias(alias))
@@ -242,7 +246,7 @@ func (s *serverService) SSH(alias string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
+	runErr := runSSHCommand(cmd)
 	cleanup()
 	if runErr != nil {
 		s.logger.Errorw("ssh command failed", "alias", alias, "error", runErr)
@@ -337,7 +341,7 @@ func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	runErr := cmd.Run()
+	runErr := runSSHCommand(cmd)
 	cleanup()
 	if runErr != nil {
 		s.logger.Errorw("ssh (with args) failed", "alias", alias, "error", runErr)
@@ -348,6 +352,32 @@ func (s *serverService) SSHWithArgs(alias string, extraArgs []string) error {
 	}
 	s.logger.Infow("ssh end (with args)", "alias", alias)
 	return nil
+}
+
+// runSSHCommand bypasses os/exec's pidfd capability probe on iSH. iSH sends
+// SIGSYS for pidfd_open instead of returning ENOSYS, which terminates Go before
+// it can fall back to the traditional process implementation.
+func runSSHCommand(command *exec.Cmd) error {
+	if !runningOnISH() {
+		return command.Run()
+	}
+	path, err := exec.LookPath(command.Path)
+	if err != nil {
+		return err
+	}
+	environment := command.Env
+	if environment == nil {
+		environment = os.Environ()
+	}
+	return runISHProcess(path, command.Args, environment, command.Dir)
+}
+
+func runningOnISH() bool {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "386" {
+		return false
+	}
+	info, err := os.Stat("/ish")
+	return err == nil && info.IsDir()
 }
 
 // StartForward starts ssh port forwarding in the background and tracks the process.

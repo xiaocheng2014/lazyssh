@@ -30,8 +30,18 @@ type ServerService interface {
 	SSH(alias string) error
 	MACOSTcpDump(alias string) error
 	SSHWithArgs(alias string, extraArgs []string) error
+	Upload(alias, localPath, remotePath string, options TransferOptions) error
+	Download(alias, remotePath, localPath string, options TransferOptions) error
 	StartForward(alias string, extraArgs []string) (int, error)
 	StopForwarding(alias string) error
 	IsForwarding(alias string) bool
 	Ping(server domain.Server) (bool, time.Duration, error)
+}
+
+// TransferOptions controls explicit file-copy behavior. Existing destinations
+// are never replaced unless Overwrite is set.
+type TransferOptions struct {
+	Recursive bool
+	Overwrite bool
+	Legacy    bool
 }

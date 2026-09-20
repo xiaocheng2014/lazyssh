@@ -123,6 +123,38 @@ func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 			},
 		},
 	)
+	uploadCmd := &cobra.Command{
+		Use:   "upload <index> <local-path> <remote-path>",
+		Short: "上传文件或目录到服务器",
+		Args:  cobra.ExactArgs(3),
+	}
+	var uploadOptions ports.TransferOptions
+	uploadCmd.Flags().BoolVarP(&uploadOptions.Recursive, "recursive", "r", false, "递归上传目录")
+	uploadCmd.Flags().BoolVar(&uploadOptions.Overwrite, "overwrite", false, "允许覆盖已存在的远端文件")
+	uploadCmd.Flags().BoolVar(&uploadOptions.Legacy, "legacy", false, "使用旧版 SCP 协议（适用于没有 SFTP 的服务器）")
+	uploadCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		home, err := userHome()
+		if err != nil {
+			return err
+		}
+		return runFileTransfer(log, home, args[0], args[1], args[2], uploadOptions, true)
+	}
+	downloadCmd := &cobra.Command{
+		Use:   "download <index> <remote-path> <local-path>",
+		Short: "从服务器下载文件或目录",
+		Args:  cobra.ExactArgs(3),
+	}
+	var downloadOptions ports.TransferOptions
+	downloadCmd.Flags().BoolVarP(&downloadOptions.Recursive, "recursive", "r", false, "递归下载目录")
+	downloadCmd.Flags().BoolVar(&downloadOptions.Overwrite, "overwrite", false, "允许覆盖已存在的本地文件")
+	downloadCmd.Flags().BoolVar(&downloadOptions.Legacy, "legacy", false, "使用旧版 SCP 协议（适用于没有 SFTP 的服务器）")
+	downloadCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		home, err := userHome()
+		if err != nil {
+			return err
+		}
+		return runFileTransfer(log, home, args[0], args[1], args[2], downloadOptions, false)
+	}
 	rootCmd.AddCommand(
 		&cobra.Command{
 			Use:   "list",
@@ -161,6 +193,8 @@ func newRootCommand(log *zap.SugaredLogger) *cobra.Command {
 			},
 		},
 		passwordCmd,
+		uploadCmd,
+		downloadCmd,
 	)
 	return rootCmd
 }
@@ -340,6 +374,26 @@ func runGo(log *zap.SugaredLogger, home, indexValue string) error {
 		server, operationErr = serverAtIndex(servers, indexValue)
 		if operationErr == nil {
 			operationErr = runtime.serverService.SSH(server.Alias)
+		}
+	}
+	return errors.Join(operationErr, runtime.manager.CloseReadOnly())
+}
+
+func runFileTransfer(log *zap.SugaredLogger, home, indexValue, source, destination string, options ports.TransferOptions, upload bool) error {
+	runtime, err := openRuntime(log, home)
+	if err != nil {
+		return err
+	}
+	servers, operationErr := runtime.serverService.ListServers("")
+	if operationErr == nil {
+		var server domain.Server
+		server, operationErr = serverAtIndex(servers, indexValue)
+		if operationErr == nil {
+			if upload {
+				operationErr = runtime.serverService.Upload(server.Alias, source, destination, options)
+			} else {
+				operationErr = runtime.serverService.Download(server.Alias, source, destination, options)
+			}
 		}
 	}
 	return errors.Join(operationErr, runtime.manager.CloseReadOnly())

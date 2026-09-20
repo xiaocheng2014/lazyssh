@@ -101,6 +101,12 @@ func (t *tui) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'V':
 		t.showVaultManager()
 		return nil
+	case 'u':
+		t.showTransferForm(true)
+		return nil
+	case 'D':
+		t.showTransferForm(false)
+		return nil
 	}
 
 	if event.Key() == tcell.KeyEnter {
